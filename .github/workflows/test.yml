@@ -1,0 +1,49 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Anaconda フル版同梱の Python 3.11 を主ターゲットに、3.12 / 3.13 も
+        # 軽く動作確認する。実機の Windows + MS Office COM は CI で再現不能
+        # なので、ここではプラットフォーム非依存のテスト（純 Python ロジック +
+        # openpyxl/lxml/jinja2/charset-normalizer/sqlite3 系）に絞る。
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # 実行時依存（Anaconda 同梱と同じ顔ぶれ）+ テスト依存
+          pip install \
+            openpyxl \
+            lxml \
+            charset-normalizer \
+            psutil \
+            tqdm \
+            jinja2 \
+            pyyaml \
+            pytest
+
+      - name: Compile-check
+        run: python -m compileall -q .
+
+      - name: Run pytest
+        run: pytest -v
