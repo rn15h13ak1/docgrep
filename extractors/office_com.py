@@ -5,13 +5,18 @@
 - 一定件数ごとにインスタンスを再生成してメモリリークを抑える
 - 確実に Close / Quit する
 - 各抽出器は List[Segment] を返し、locator にシート名・スライド番号・図形名等を入れる
+
+内部設計:
+  _AppHandle: Word/Excel/PowerPoint で共通の DispatchEx / Quit / recycle カウンタを集約
+  _WordHandle / _ExcelHandle / _PptHandle: アプリ固有の起動オプションだけを上書き
+  OfficeCom: 3 つのハンドルをまとめて持ち、extract_* メソッドを公開する
 """
 from __future__ import annotations
 
 import gc
 import os
 import sys
-from typing import List
+from typing import Dict, List
 
 from search import Segment
 
@@ -30,18 +35,114 @@ def is_available() -> bool:
     return sys.platform == "win32" and HAS_WIN32
 
 
+# =============================================================================
+# COM ハンドル共通基底
+# =============================================================================
+
+class _AppHandle:
+    """Office アプリの COM ハンドル管理（DispatchEx + Quit + 再生成カウンタ）。
+
+    サブクラスで `PROG_ID` と `_configure(app)` を上書きする。
+    """
+    PROG_ID: str = ""
+
+    def __init__(self, recycle_every: int) -> None:
+        self.app = None
+        self.count = 0
+        self.recycle_every = max(1, int(recycle_every))
+
+    def get(self):
+        if self.app is None:
+            self.app = win32com.client.DispatchEx(self.PROG_ID)
+            self._configure(self.app)
+        return self.app
+
+    def _configure(self, app) -> None:
+        """アプリ固有の起動オプション (Visible=False など) を設定する。"""
+
+    def tick(self) -> None:
+        """1 ファイル処理ごとに呼ぶ。recycle_every 件で破棄して再生成可能に。"""
+        self.count += 1
+        if self.count >= self.recycle_every:
+            self.recycle()
+
+    def recycle(self) -> None:
+        if self.app is not None:
+            try:
+                self.app.Quit()
+            except Exception:
+                pass
+            self.app = None
+        self.count = 0
+        gc.collect()
+
+
+class _WordHandle(_AppHandle):
+    PROG_ID = "Word.Application"
+
+    def _configure(self, app) -> None:
+        try:
+            app.Visible = False
+        except Exception:
+            pass
+        try:
+            app.DisplayAlerts = 0  # wdAlertsNone
+        except Exception:
+            pass
+
+
+class _ExcelHandle(_AppHandle):
+    PROG_ID = "Excel.Application"
+
+    def _configure(self, app) -> None:
+        try:
+            app.Visible = False
+        except Exception:
+            pass
+        try:
+            app.DisplayAlerts = False
+        except Exception:
+            pass
+        try:
+            app.AskToUpdateLinks = False
+        except Exception:
+            pass
+
+
+class _PptHandle(_AppHandle):
+    PROG_ID = "PowerPoint.Application"
+
+    def _configure(self, app) -> None:
+        # PowerPoint は Visible=False を受け付けない場合がある
+        try:
+            app.DisplayAlerts = 1  # ppAlertsNone
+        except Exception:
+            pass
+
+
+# =============================================================================
+# OfficeCom: Word/Excel/PowerPoint をまとめて提供する抽出器
+# =============================================================================
+
 class OfficeCom:
     """Word/Excel(.xls)/PowerPoint の COM インスタンスを管理する抽出器。"""
 
     def __init__(self, recycle_every: int = 30) -> None:
         if not is_available():
             raise RuntimeError("OfficeCom is not available on this platform.")
-        self.recycle_every = max(1, int(recycle_every))
-        self.word = None
-        self.excel = None
-        self.ppt = None
-        self.counts = {"word": 0, "excel": 0, "ppt": 0}
+        self._word = _WordHandle(recycle_every)
+        self._excel = _ExcelHandle(recycle_every)
+        self._ppt = _PptHandle(recycle_every)
         pythoncom.CoInitialize()
+
+    # 旧 API 互換: 外部から self.counts を読まれてもよいように property で公開
+    @property
+    def counts(self) -> Dict[str, int]:
+        return {
+            "word": self._word.count,
+            "excel": self._excel.count,
+            "ppt": self._ppt.count,
+        }
 
     def __enter__(self) -> "OfficeCom":
         return self
@@ -50,67 +151,28 @@ class OfficeCom:
         self.shutdown()
 
     def shutdown(self) -> None:
-        for attr in ("word", "excel", "ppt"):
-            app = getattr(self, attr, None)
-            if app is not None:
-                try:
-                    app.Quit()
-                except Exception:
-                    pass
-                setattr(self, attr, None)
+        for h in (self._word, self._excel, self._ppt):
+            h.recycle()
         try:
             pythoncom.CoUninitialize()
         except Exception:
             pass
 
-    def _recycle(self, key: str) -> None:
-        app = getattr(self, key, None)
-        if app is not None:
-            try:
-                app.Quit()
-            except Exception:
-                pass
-            setattr(self, key, None)
-        self.counts[key] = 0
-        gc.collect()
-
     def recover_all(self) -> None:
         """COM が応答しなくなったときに全インスタンスを破棄して再生成可能な状態にする。
 
         タイムアウト超過などで Office プロセスが応答しなくなった疑いがあるときに
-        呼ぶ。次回 _get_* で新規 DispatchEx される。Quit() 自体が固まる可能性が
-        あるため、wait 系の例外は全て無視する。
+        呼ぶ。次回 get() で新規 DispatchEx される。Quit() 自体が固まる可能性が
+        あるため例外は全て無視する。
         """
-        for key in ("word", "excel", "ppt"):
-            app = getattr(self, key, None)
-            if app is None:
-                continue
-            try:
-                app.Quit()
-            except Exception:
-                pass
-            setattr(self, key, None)
-            self.counts[key] = 0
-        gc.collect()
+        for h in (self._word, self._excel, self._ppt):
+            h.recycle()
 
     # =========================================================
     # Word
     # =========================================================
-    def _get_word(self):
-        if self.word is None:
-            self.word = win32com.client.DispatchEx("Word.Application")
-            try:
-                self.word.Visible = False
-            except Exception:
-                pass
-            try:
-                self.word.DisplayAlerts = 0  # wdAlertsNone
-            except Exception:
-                pass
-        return self.word
-
     def extract_word(self, path: str) -> List[Segment]:
-        word = self._get_word()
+        word = self._word.get()
         doc = None
         segments: List[Segment] = []
         try:
@@ -198,25 +260,14 @@ class OfficeCom:
                     doc.Close(SaveChanges=False)
                 except Exception:
                     pass
-            self.counts["word"] += 1
-            if self.counts["word"] >= self.recycle_every:
-                self._recycle("word")
+            self._word.tick()
         return segments
 
     # =========================================================
     # PowerPoint
     # =========================================================
-    def _get_ppt(self):
-        if self.ppt is None:
-            self.ppt = win32com.client.DispatchEx("PowerPoint.Application")
-            try:
-                self.ppt.DisplayAlerts = 1  # ppAlertsNone
-            except Exception:
-                pass
-        return self.ppt
-
     def extract_powerpoint(self, path: str) -> List[Segment]:
-        app = self._get_ppt()
+        app = self._ppt.get()
         pres = None
         segments: List[Segment] = []
         try:
@@ -273,33 +324,14 @@ class OfficeCom:
                     pres.Close()
                 except Exception:
                     pass
-            self.counts["ppt"] += 1
-            if self.counts["ppt"] >= self.recycle_every:
-                self._recycle("ppt")
+            self._ppt.tick()
         return segments
 
     # =========================================================
     # Excel (旧形式 .xls)
     # =========================================================
-    def _get_excel(self):
-        if self.excel is None:
-            self.excel = win32com.client.DispatchEx("Excel.Application")
-            try:
-                self.excel.Visible = False
-            except Exception:
-                pass
-            try:
-                self.excel.DisplayAlerts = False
-            except Exception:
-                pass
-            try:
-                self.excel.AskToUpdateLinks = False
-            except Exception:
-                pass
-        return self.excel
-
     def extract_excel_old(self, path: str) -> List[Segment]:
-        excel = self._get_excel()
+        excel = self._excel.get()
         wb = None
         segments: List[Segment] = []
         try:
@@ -384,9 +416,7 @@ class OfficeCom:
                     wb.Close(SaveChanges=False)
                 except Exception:
                     pass
-            self.counts["excel"] += 1
-            if self.counts["excel"] >= self.recycle_every:
-                self._recycle("excel")
+            self._excel.tick()
         return segments
 
 
