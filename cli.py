@@ -543,6 +543,9 @@ def _emit_reports(ctx: ScanContext, result: ScanResult,
             log.warning("Excel 出力に失敗: %s", e)
             log.debug("Excel 出力 traceback", exc_info=True)
 
+    html_out_dir: Optional[Path] = None
+    latest_html_name: Optional[str] = None
+
     if cfg["output"]["html"]["enabled"]:
         try:
             from reporter.html import write_html
@@ -551,6 +554,7 @@ def _emit_reports(ctx: ScanContext, result: ScanResult,
             write_html(html_path, result.hit_results, summary, ctx.searcher,
                        errors=result.error_results, skipped=result.skip_files)
             log.info("HTML 出力: %s", html_path)
+            html_out_dir = Path(html_path).resolve().parent
 
             latest_template = cfg["output"]["html"].get("latest_path")
             if latest_template:
@@ -560,9 +564,22 @@ def _emit_reports(ctx: ScanContext, result: ScanResult,
                     ensure_dir(Path(latest_path).resolve().parent)
                     shutil.copyfile(html_path, latest_path)
                     log.info("HTML 最新: %s", latest_path)
+                # latest が同じディレクトリにあれば一覧の「最新版」セクションに使う
+                if Path(latest_path).resolve().parent == html_out_dir:
+                    latest_html_name = Path(latest_path).name
         except Exception as e:
             log.warning("HTML 出力に失敗: %s", e)
             log.debug("HTML 出力 traceback", exc_info=True)
+
+    # === レポート一覧 _index.html を更新 ===
+    if html_out_dir is not None:
+        try:
+            from reporter.index import build_report_index
+            idx = build_report_index(html_out_dir, latest_html_name=latest_html_name)
+            log.info("レポート一覧: %s", idx)
+        except Exception as e:
+            log.warning("レポート一覧の生成に失敗: %s", e)
+            log.debug("Index 生成 traceback", exc_info=True)
 
 
 def _print_summary(summary: Dict[str, Any]) -> None:
