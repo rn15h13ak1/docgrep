@@ -8,14 +8,18 @@ docgrep の全文検索・OneNote エクスポートを対話形式で実行す�
   python menu.py
 """
 
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 WIDTH = 62
+
+# 入力履歴ファイル（前回キーワード / モード / パスを覚えて再利用）
+HISTORY_PATH = Path.home() / ".docgrep_history.json"
 
 
 # ================================================================
@@ -81,6 +85,42 @@ def ask_float(prompt: str, default: Optional[float] = None,
 
 def wait_enter():
     input("\n  Enter キーでメニューに戻ります...")
+
+
+# ================================================================
+# 履歴の読み書き
+# ================================================================
+
+def _load_history() -> Dict[str, Any]:
+    """前回の入力履歴を読み込む。読み込み失敗時は空 dict。"""
+    if not HISTORY_PATH.is_file():
+        return {}
+    try:
+        with HISTORY_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_history(entry: Dict[str, Any]) -> None:
+    """履歴を保存する。失敗しても致命ではないので握りつぶす。"""
+    try:
+        HISTORY_PATH.write_text(
+            json.dumps(entry, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _ask_with_history(prompt: str, prev: Optional[str]) -> str:
+    """前回値があれば [前回値] を表示し、空 Enter で再利用させる。"""
+    label = f"{prompt} [{prev}]" if prev else prompt
+    ans = input(f"  {label}: ").strip()
+    if not ans and prev:
+        return prev
+    return ans
 
 
 # ================================================================
@@ -266,17 +306,22 @@ def _ask_common_options() -> List[str]:
 
 
 def _run_search():
+    history = _load_history()
+    prev_keywords = history.get("keywords", "")
+    prev_mode = history.get("mode", "")
+    prev_paths: List[str] = history.get("paths", []) or []
+
     while True:
         # Step 0: 設定ファイル選択
         config_arg, resolved_config = _input_config()
         if config_arg is None:
             return  # 中止
 
-        # Step 1: 検索パス選択
-        path_choice = print_menu(
-            "docgrep - 検索パス",
-            ["config.yaml の設定に従う", "パスを指定する"],
-        )
+        # Step 1: 検索パス選択（前回履歴があれば「前回のパスを再利用」も提示）
+        path_options = ["config.yaml の設定に従う", "パスを指定する"]
+        if prev_paths:
+            path_options.append(f"前回のパスを再利用 ({len(prev_paths)} 件)")
+        path_choice = print_menu("docgrep - 検索パス", path_options)
         if path_choice == 0:
             return
 
@@ -287,20 +332,28 @@ def _run_search():
                 print("  パスが入力されていません。中止します。")
                 wait_enter()
                 return
+        elif path_choice == 3 and prev_paths:
+            custom_paths = list(prev_paths)
+            print(f"  前回のパスを再利用: {custom_paths}")
 
-        # Step 2: 検索キーワード入力
+        # Step 2: 検索キーワード入力（前回値を [履歴] で提示）
         print()
-        keywords_str = input("  検索キーワード（スペース区切り、空で中止）: ").strip()
+        keywords_str = _ask_with_history(
+            "検索キーワード（スペース区切り、空で中止）", prev_keywords
+        )
         if not keywords_str:
             return
         keywords = keywords_str.split()
 
-        # Step 3: 検索モード選択
+        # Step 3: 検索モード選択（前回値があれば既定として 0=戻る ではなく直接採用）
         mode_items = [
             "キーワード検索（keyword）",
             "正規表現検索（regex）",
             "あいまい検索（fuzzy）",
         ]
+        prev_mode_idx = {"keyword": 1, "regex": 2, "fuzzy": 3}.get(prev_mode)
+        if prev_mode_idx:
+            mode_items[prev_mode_idx - 1] += "  ← 前回"
         mode_choice = print_menu("docgrep - 検索モード", mode_items)
         if mode_choice == 0:
             return
@@ -342,6 +395,13 @@ def _run_search():
             return
         if confirm_choice == 2:
             continue
+
+        # 実行直前に履歴を保存（次回起動で再利用）
+        _save_history({
+            "keywords": " ".join(keywords),
+            "mode": mode,
+            "paths": custom_paths,
+        })
 
         # Step 7: 実行
         args: List[str] = list(keywords)
