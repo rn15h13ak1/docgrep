@@ -57,10 +57,11 @@ exclude:
     - .venv
     - venv
   patterns:
-    - "~$*"        # Office 一時ファイル
+    - "~$*"               # Office 一時ファイル
     - "*.tmp"
     - ".DS_Store"
     - "Thumbs.db"
+    - "_docgrep_meta.json" # OneNote エクスポートのメタ情報（差分更新用）
   max_file_size_mb: 100
 
 # 検索設定

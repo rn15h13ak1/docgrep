@@ -22,7 +22,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     ],
     "exclude": {
         "dirs": [".git", ".svn", "node_modules", "__pycache__", ".venv", "venv"],
-        "patterns": ["~$*", "*.tmp", ".DS_Store", "Thumbs.db"],
+        "patterns": ["~$*", "*.tmp", ".DS_Store", "Thumbs.db", "_docgrep_meta.json"],
         "max_file_size_mb": 100,
     },
     "search": {
