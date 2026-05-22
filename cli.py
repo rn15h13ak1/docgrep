@@ -36,21 +36,39 @@ class _NoopBar:
         pass
 
 
-def _process_file(path: str, registry: ExtractorRegistry, searcher: Searcher
+def _process_file(path: str, registry: ExtractorRegistry, searcher: Searcher,
+                  cache=None
                   ) -> Tuple[str, Optional[List], Optional[str], Optional[str]]:
     """1 ファイルを抽出 + 検索する。スレッド安全であること（registry/searcher の状態を変更しない）。
+
+    cache が指定されていれば、mtime/size が一致した場合は抽出をスキップして
+    キャッシュから Segment を読む。新規抽出時は結果を cache.put で永続化する。
 
     Returns:
         (path, hits or None, skip_reason or None, error_message or None)
     """
-    try:
-        segments, skip_reason = registry.extract(path)
-    except Exception as e:
-        return path, None, None, f"extract_error: {e}"
-    if skip_reason:
-        return path, None, skip_reason, None
-    if not segments:
-        return path, None, None, None
+    segments = None
+    if cache is not None:
+        try:
+            segments = cache.get(path)
+        except Exception:
+            segments = None
+
+    if segments is None:
+        try:
+            segments, skip_reason = registry.extract(path)
+        except Exception as e:
+            return path, None, None, f"extract_error: {e}"
+        if skip_reason:
+            return path, None, skip_reason, None
+        if not segments:
+            return path, None, None, None
+        if cache is not None:
+            try:
+                cache.put(path, segments)
+            except Exception:
+                pass  # キャッシュ書き込み失敗は致命ではない
+
     try:
         hits = searcher.search(segments)
     except Exception as e:
@@ -107,6 +125,17 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="MS Office チェックをスキップ（runtime.require_office=false 相当）")
     p.add_argument("-v", "--verbose", action="store_true", help="DEBUG レベルログを出力")
     p.add_argument("--quiet", action="store_true", help="進捗バー等を抑制（ログは WARNING 以上）")
+    p.add_argument("--max-files", type=int, metavar="N",
+                   help="N 件のヒットファイルを得たら走査を打ち切る（0 で無効）")
+    p.add_argument("--first-hit-only", action="store_true",
+                   help="最初の 1 ヒットで走査を打ち切る (--max-files=1 相当)")
+    p.add_argument("--ordered-output", action="store_true",
+                   help="並列処理時もコンソール出力をファイル入力順に揃える（速度より順序優先）")
+    p.add_argument("--cache", dest="cache", action="store_true", default=None,
+                   help="抽出結果の SQLite キャッシュを有効化（runtime.cache.enabled=true 相当）")
+    p.add_argument("--no-cache", dest="cache", action="store_false",
+                   help="抽出結果の SQLite キャッシュを無効化")
+    p.add_argument("--cache-path", help="キャッシュ DB のパス上書き")
     return p
 
 
@@ -137,6 +166,10 @@ def _merge_cli(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
         cfg["output"]["console"] = False
     if args.no_office_check:
         cfg["runtime"]["require_office"] = False
+    if args.cache is not None:
+        cfg["runtime"].setdefault("cache", {})["enabled"] = args.cache
+    if args.cache_path:
+        cfg["runtime"].setdefault("cache", {})["path"] = args.cache_path
     return cfg
 
 
@@ -205,6 +238,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     parallel_registry = ExtractorRegistry(com=None)
     serial_registry = ExtractorRegistry(com=com)
 
+    # === SQLite キャッシュ（オプトイン） ===
+    cache = None
+    cache_cfg = cfg["runtime"].get("cache") or {}
+    if cache_cfg.get("enabled"):
+        try:
+            from cache import SegmentCache
+            cache = SegmentCache(Path(cache_cfg.get("path", "reports/.docgrep_cache.sqlite")))
+            log.info("キャッシュ有効: %s", cache.db_path)
+        except Exception as e:
+            log.warning("キャッシュ初期化に失敗: %s", e)
+            cache = None
+
     # === 走査対象: OneNote エクスポートフォルダを自動追加 ===
     paths: List[str] = list(cfg["paths"])
     onenote_dir = cfg.get("onenote_export_dir")
@@ -249,6 +294,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     timeout_sec = float(cfg["runtime"].get("per_file_timeout_sec", 0) or 0)
 
+    # 走査打ち切り条件
+    max_files = 1 if args.first_hit_only else (args.max_files or 0)
+    stop_event = threading.Event()
+
     log.info(
         "走査開始: %d ファイル (並列対象=%d / COM 直列=%d, 並列度=%d, タイムアウト=%s) / paths=%s",
         total, len(parallel_files), len(serial_files), parallel_workers,
@@ -288,11 +337,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 with console_lock:
                     render_console(fr, quiet=args.quiet)
         pbar.update(1)
+        # --max-files / --first-hit-only に到達したら停止フラグを立てる
+        if max_files and len(hit_results) >= max_files and not stop_event.is_set():
+            stop_event.set()
+            log.info("ヒットファイル %d 件に達したため走査を打ち切ります。", max_files)
 
     def _process_with_timeout(path: str, reg: ExtractorRegistry) -> Tuple:
         """timeout_sec > 0 なら 1 ファイル別スレッドで実行し timeout で打ち切る。"""
+        if stop_event.is_set():
+            return path, None, "stopped", None
         if timeout_sec <= 0:
-            return _process_file(path, reg, searcher)
+            return _process_file(path, reg, searcher, cache=cache)
         with cf.ThreadPoolExecutor(max_workers=1,
                                    thread_name_prefix="docgrep-to") as ex:
             fut = ex.submit(_process_file, path, reg, searcher)
@@ -313,19 +368,36 @@ def main(argv: Optional[List[str]] = None) -> int:
                     futures = [ex.submit(_process_with_timeout, p, parallel_registry)
                                for p in parallel_files]
                     try:
-                        for fut in cf.as_completed(futures):
-                            _on_result(fut.result())
+                        if args.ordered_output:
+                            # 投入順にブロッキング (順序保持 / 並列度は維持)
+                            for fut in futures:
+                                if stop_event.is_set():
+                                    fut.cancel()
+                                    continue
+                                _on_result(fut.result())
+                        else:
+                            for fut in cf.as_completed(futures):
+                                if stop_event.is_set():
+                                    # 残タスクをキャンセル（既に走っているものは完了する）
+                                    for f in futures:
+                                        if not f.done():
+                                            f.cancel()
+                                    break
+                                _on_result(fut.result())
                     except KeyboardInterrupt:
-                        # 残タスクをキャンセルしてから抜ける
                         for f in futures:
                             f.cancel()
                         raise
             else:
                 for p in parallel_files:
+                    if stop_event.is_set():
+                        break
                     _on_result(_process_with_timeout(p, parallel_registry))
 
         # --- 直列フェーズ (COM: Word/PPT/旧Excel) ---
         for p in serial_files:
+            if stop_event.is_set():
+                break
             _on_result(_process_with_timeout(p, serial_registry))
     except KeyboardInterrupt:
         interrupted = True
@@ -334,6 +406,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         pbar.close()
         if com is not None:
             com.shutdown()
+        if cache is not None:
+            log.info("キャッシュ統計: hits=%d, misses=%d, writes=%d",
+                     cache.hits, cache.misses, cache.writes)
+            cache.close()
 
     elapsed = time.monotonic() - start
 
@@ -352,6 +428,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         summary["スキップ内訳"] = ", ".join(f"{k}={len(v)}" for k, v in skip_files.items())
     if interrupted:
         summary["中断"] = "Ctrl+C により途中終了"
+    if stop_event.is_set() and not interrupted:
+        summary["打ち切り"] = f"max_files={max_files} に到達"
 
     # === 出力 ===
     slug = timestamp_slug()

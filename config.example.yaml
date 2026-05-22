@@ -99,8 +99,14 @@ runtime:
   copy_to_temp: false
   # COM インスタンスを何件処理ごとに再生成するか（メモリリーク対策）
   com_recycle_every: 30
-  # 1ファイルあたりタイムアウト秒。0 で無効
+  # 1ファイルあたりタイムアウト秒。0 で無効。
+  # text/xlsx の並列ワーカーと、COM 直列フェーズの両方に適用される。
   per_file_timeout_sec: 0
+  # 抽出結果の SQLite キャッシュ。enabled=true なら 2 回目以降の検索が
+  # 劇的に速くなる（path+mtime+size をキーに Segment を再利用）。
+  cache:
+    enabled: false
+    path: "reports/.docgrep_cache.sqlite"
 
 # 出力
 # path に "{ts}" を含めると実行時刻 (YYYYMMDD-HHMMSS) に置換されます。

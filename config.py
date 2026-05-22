@@ -45,6 +45,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "copy_to_temp": False,
         "com_recycle_every": 30,
         "per_file_timeout_sec": 0,
+        # 抽出結果の SQLite キャッシュ。enabled=true なら2回目以降の検索が劇的に速くなる。
+        # path に "{ts}" や相対パスを使えるが、通常は固定パスにする。
+        "cache": {
+            "enabled": False,
+            "path": "reports/.docgrep_cache.sqlite",
+        },
     },
     "output": {
         "console": True,
@@ -162,6 +168,13 @@ def _resolve_paths(cfg: Dict[str, Any], base_dir: Path) -> None:
                 if isinstance(section.get("latest_path"), str):
                     section["latest_path"] = _r(section["latest_path"])
 
+    # runtime.cache.path
+    runtime = cfg.get("runtime")
+    if isinstance(runtime, dict):
+        cache_cfg = runtime.get("cache")
+        if isinstance(cache_cfg, dict) and isinstance(cache_cfg.get("path"), str):
+            cache_cfg["path"] = _r(cache_cfg["path"])
+
 
 def _validate_no_backslash(data: Dict[str, Any], source: str) -> None:
     r"""YAML/JSON で読み込んだパス値にバックスラッシュが含まれていないか検証する。
@@ -195,6 +208,14 @@ def _validate_no_backslash(data: Dict[str, Any], source: str) -> None:
                 lp = section.get("latest_path")
                 if isinstance(lp, str) and "\\" in lp:
                     violations.append(f"output.{key}.latest_path = {lp!r}")
+
+    runtime = data.get("runtime")
+    if isinstance(runtime, dict):
+        cache_cfg = runtime.get("cache")
+        if isinstance(cache_cfg, dict):
+            cp = cache_cfg.get("path")
+            if isinstance(cp, str) and "\\" in cp:
+                violations.append(f"runtime.cache.path = {cp!r}")
 
     if violations:
         raise ConfigError(
