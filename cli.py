@@ -344,6 +344,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             log.info("Excel 出力: %s", excel_path)
         except Exception as e:
             log.warning("Excel 出力に失敗: %s", e)
+            log.debug("Excel 出力 traceback", exc_info=True)
 
     if cfg["output"]["html"]["enabled"]:
         try:
@@ -364,6 +365,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     log.info("HTML 最新: %s", latest_path)
         except Exception as e:
             log.warning("HTML 出力に失敗: %s", e)
+            log.debug("HTML 出力 traceback", exc_info=True)
 
     # === コンソールサマリ（自動化スクリプトからも読めるよう print で出力） ===
     print()

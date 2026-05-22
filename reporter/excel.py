@@ -2,17 +2,37 @@
 
 results シートは 1 ヒット 1 行（パスの繰り返しは許容）で、検知箇所
 (locator) を独立カラムに持たせる。オートフィルタ・並べ替えがしやすい。
+
+注意: openpyxl は OOXML 仕様の制限から一部の制御文字 (\x00-\x08, \x0B, \x0C,
+\x0E-\x1F) を含むセル値を受け付けず IllegalCharacterError で wb.save() が
+失敗する。Word/PowerPoint から COM で抜いた本文に \x07 (BEL) や \x0B (VT)
+等が紛れることがあるため、append 前に必ず _sanitize() を通す。
 """
 from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from search import FileResult
+
+
+def _sanitize(val: Any) -> Any:
+    """openpyxl が拒否する制御文字を半角スペースに置換する。
+
+    文字列以外（数値・None など）はそのまま返す。
+    """
+    if isinstance(val, str):
+        return ILLEGAL_CHARACTERS_RE.sub(" ", val)
+    return val
+
+
+def _row(*cells: Any) -> List[Any]:
+    return [_sanitize(c) for c in cells]
 
 
 def write_excel(
@@ -41,7 +61,7 @@ def write_excel(
         except OSError:
             mtime = ""
         for hit in fr.hits:
-            ws.append([fr.path, ext, hit.locator, hit.matched, hit.snippet, mtime])
+            ws.append(_row(fr.path, ext, hit.locator, hit.matched, hit.snippet, mtime))
             ws.cell(row=ws.max_row, column=5).alignment = Alignment(
                 wrap_text=True, vertical="top"
             )
@@ -62,7 +82,7 @@ def write_excel(
         cell.font = Font(bold=True)
         cell.fill = header_fill
     for k, v in summary.items():
-        ws2.append([k, v])
+        ws2.append(_row(k, v))
     ws2.column_dimensions["A"].width = 24
     ws2.column_dimensions["B"].width = 60
 
@@ -75,7 +95,7 @@ def write_excel(
             cell.font = Font(bold=True)
             cell.fill = header_fill
         for fr in err_list:
-            ws3.append([fr.path, fr.error])
+            ws3.append(_row(fr.path, fr.error))
         ws3.column_dimensions["A"].width = 80
         ws3.column_dimensions["B"].width = 80
         ws3.freeze_panes = "A2"
