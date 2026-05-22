@@ -247,9 +247,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         parallel_workers = configured
 
+    timeout_sec = float(cfg["runtime"].get("per_file_timeout_sec", 0) or 0)
+
     log.info(
-        "走査開始: %d ファイル (並列対象=%d / COM 直列=%d, 並列度=%d) / paths=%s",
-        total, len(parallel_files), len(serial_files), parallel_workers, paths,
+        "走査開始: %d ファイル (並列対象=%d / COM 直列=%d, 並列度=%d, タイムアウト=%s) / paths=%s",
+        total, len(parallel_files), len(serial_files), parallel_workers,
+        f"{timeout_sec:g}s" if timeout_sec > 0 else "無効",
+        paths,
     )
 
     interrupted = False
@@ -285,13 +289,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                     render_console(fr, quiet=args.quiet)
         pbar.update(1)
 
+    def _process_with_timeout(path: str, reg: ExtractorRegistry) -> Tuple:
+        """timeout_sec > 0 なら 1 ファイル別スレッドで実行し timeout で打ち切る。"""
+        if timeout_sec <= 0:
+            return _process_file(path, reg, searcher)
+        with cf.ThreadPoolExecutor(max_workers=1,
+                                   thread_name_prefix="docgrep-to") as ex:
+            fut = ex.submit(_process_file, path, reg, searcher)
+            try:
+                return fut.result(timeout=timeout_sec)
+            except cf.TimeoutError:
+                # ワーカースレッドは残るが、対象が固まっているなら強制終了はできない。
+                # ExecutorService を wait=False で破棄して呼び出し側は続行。
+                ex.shutdown(wait=False, cancel_futures=True)
+                return path, None, None, f"timeout_error: exceeded {timeout_sec:g}s"
+
     try:
         # --- 並列フェーズ (text/xlsx) ---
         if parallel_files:
             if parallel_workers > 1:
                 with cf.ThreadPoolExecutor(max_workers=parallel_workers,
                                            thread_name_prefix="docgrep") as ex:
-                    futures = [ex.submit(_process_file, p, parallel_registry, searcher)
+                    futures = [ex.submit(_process_with_timeout, p, parallel_registry)
                                for p in parallel_files]
                     try:
                         for fut in cf.as_completed(futures):
@@ -303,11 +322,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                         raise
             else:
                 for p in parallel_files:
-                    _on_result(_process_file(p, parallel_registry, searcher))
+                    _on_result(_process_with_timeout(p, parallel_registry))
 
         # --- 直列フェーズ (COM: Word/PPT/旧Excel) ---
         for p in serial_files:
-            _on_result(_process_file(p, serial_registry, searcher))
+            _on_result(_process_with_timeout(p, serial_registry))
     except KeyboardInterrupt:
         interrupted = True
         log.warning("中断されました。これまでの結果を出力します。")

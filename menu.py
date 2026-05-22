@@ -8,9 +8,11 @@ docgrep の全文検索・OneNote エクスポートを対話形式で実行す�
   python menu.py
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 WIDTH = 62
@@ -44,15 +46,103 @@ def print_menu(title, items, back_label="戻る"):
         print("  ※ 無効な入力です。もう一度入力してください。")
 
 
+def ask_yes_no(prompt: str, default: bool = False) -> bool:
+    """y/n 質問。空 Enter で default。"""
+    suffix = " [Y/n]" if default else " [y/N]"
+    while True:
+        ans = input(f"  {prompt}{suffix}: ").strip().lower()
+        if not ans:
+            return default
+        if ans in ("y", "yes"):
+            return True
+        if ans in ("n", "no"):
+            return False
+        print("  ※ y か n を入力してください。")
+
+
+def ask_float(prompt: str, default: Optional[float] = None,
+              min_val: float = 0.0, max_val: float = 1.0) -> Optional[float]:
+    """範囲付き float 入力。Enter で default。"""
+    suffix = f" [{default}]" if default is not None else ""
+    while True:
+        ans = input(f"  {prompt}{suffix}: ").strip()
+        if not ans:
+            return default
+        try:
+            v = float(ans)
+        except ValueError:
+            print(f"  ※ 数値を入力してください ({min_val}〜{max_val})")
+            continue
+        if not (min_val <= v <= max_val):
+            print(f"  ※ {min_val}〜{max_val} の範囲で指定してください")
+            continue
+        return v
+
+
 def wait_enter():
     input("\n  Enter キーでメニューに戻ります...")
+
+
+# ================================================================
+# config.yaml から output.html.latest_path を取得
+# ================================================================
+
+def _resolve_latest_html_path(config_path: Optional[Path]) -> Optional[Path]:
+    """config.yaml の output.html.latest_path を解決して返す。
+
+    config 未指定なら CWD → SCRIPT_DIR の順で探す。読めなければ None。
+    """
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        return None
+
+    candidates = []
+    if config_path:
+        candidates.append(Path(config_path))
+    else:
+        candidates.append(Path.cwd() / "config.yaml")
+        candidates.append(SCRIPT_DIR / "config.yaml")
+
+    cfg_file = next((p for p in candidates if p.is_file()), None)
+    if not cfg_file:
+        return None
+
+    try:
+        with cfg_file.open("r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+    except Exception:
+        return None
+
+    latest = cfg.get("output", {}).get("html", {}).get("latest_path")
+    if not isinstance(latest, str) or not latest:
+        return None
+
+    p = Path(latest)
+    if not p.is_absolute():
+        p = (cfg_file.resolve().parent / p).resolve()
+    return p
+
+
+def _open_in_browser(path: Path) -> None:
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
+        print(f"  HTML レポートを開きました: {path}")
+    except Exception as e:
+        print(f"  ※ レポートを開けませんでした: {e}")
+        print(f"     直接開いてください: {path}")
 
 
 # ================================================================
 # 子プロセス起動
 # ================================================================
 
-def _run_docgrep(args: list, wait: bool = True) -> int:
+def _run_docgrep(args: List[str], wait: bool = True) -> int:
     """SCRIPT_DIR/docgrep.py を subprocess で実行する。"""
     cmd = [sys.executable, "docgrep.py"] + args
 
@@ -65,7 +155,11 @@ def _run_docgrep(args: list, wait: bool = True) -> int:
 
     hr("-")
     if result.returncode == 0:
-        print("  完了しました。")
+        print("  完了しました（ヒットあり）。")
+    elif result.returncode == 1:
+        print("  完了しました（ヒットなし）。")
+    elif result.returncode == 130:
+        print("  中断されました。")
     else:
         print(f"  エラーが発生しました（終了コード: {result.returncode}）")
 
@@ -75,10 +169,7 @@ def _run_docgrep(args: list, wait: bool = True) -> int:
 
 
 def _run_export(wait: bool = True) -> int:
-    """
-    OneNote を Word(.docx) に一括エクスポート（粒度は ps1 既定の section 固定）。
-    戻り値: PowerShell スクリプトの終了コード
-    """
+    """OneNote を Word(.docx) に一括エクスポート（粒度は ps1 既定の section 固定）。"""
     script = SCRIPT_DIR / "export_onenote.ps1"
     cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)]
 
@@ -103,8 +194,7 @@ def _run_export(wait: bool = True) -> int:
 # 全文検索フロー
 # ================================================================
 
-def _input_paths() -> list:
-    """パスを複数入力させる（空Enter で終了）"""
+def _input_paths() -> List[str]:
     print()
     print("  検索パスを入力してください（1行1パス、空Enter で確定）。")
     paths = []
@@ -116,17 +206,72 @@ def _input_paths() -> list:
     return paths
 
 
+def _input_config() -> Tuple[Optional[str], Optional[Path]]:
+    """設定ファイル選択。返り値: (cli 引数用 path or None, 解決済み Path or None)"""
+    choice = print_menu(
+        "docgrep - 設定ファイル",
+        ["既定（CWD → スクリプト同梱の config.yaml）", "別ファイルを指定"],
+    )
+    if choice == 0:
+        return None, None
+    if choice == 1:
+        # 既定 → CLI 引数なし、自動検出に任せる
+        return "__default__", None
+    ans = input("  設定ファイルのパス: ").strip()
+    if not ans:
+        return None, None
+    p = Path(ans).expanduser()
+    if not p.is_file():
+        print(f"  ※ ファイルが見つかりません: {p}")
+        wait_enter()
+        return None, None
+    return str(p), p.resolve()
+
+
+def _ask_mode_options(mode: str, n_keywords: int) -> Dict[str, str]:
+    """モード固有のオプションを尋ねる。返り値は CLI 引数の dict（key=value）形式。"""
+    opts: Dict[str, str] = {}
+    if mode == "keyword" and n_keywords >= 2:
+        choice = print_menu(
+            "複数キーワードの結合",
+            ["AND（すべて含む）", "OR（いずれか含む）"],
+            back_label="既定 (AND)",
+        )
+        if choice == 1:
+            opts["--operator"] = "and"
+        elif choice == 2:
+            opts["--operator"] = "or"
+    elif mode == "fuzzy":
+        threshold = ask_float(
+            "あいまい検索のしきい値 (0.0-1.0、Enter で既定 0.80)",
+            default=None,
+        )
+        if threshold is not None:
+            opts["--fuzzy-threshold"] = f"{threshold:g}"
+    return opts
+
+
+def _ask_common_options() -> List[str]:
+    """共通オプション（大小区別 / NFKC / verbose）を任意指定。"""
+    if not ask_yes_no("詳細オプションを指定しますか？", default=False):
+        return []
+    flags: List[str] = []
+    if ask_yes_no("大文字小文字を区別する？", default=False):
+        flags.append("--case-sensitive")
+    if not ask_yes_no("全角半角の正規化を有効にする？（既定: 有効）", default=True):
+        flags.append("--no-normalize-width")
+    if ask_yes_no("詳細ログ (--verbose) を出力する？", default=False):
+        flags.append("--verbose")
+    return flags
+
+
 def _run_search():
-    """
-    全文検索を実行する。
-    フロー:
-      1. 検索パスを config.yaml に従うか手動指定か選択
-      2. 検索キーワードを入力
-      3. 検索モードを選択
-      4. 入力内容を確認（実行 / 最初から入力し直し / 中止）
-      5. 実行
-    """
     while True:
+        # Step 0: 設定ファイル選択
+        config_arg, resolved_config = _input_config()
+        if config_arg is None:
+            return  # 中止
+
         # Step 1: 検索パス選択
         path_choice = print_menu(
             "docgrep - 検索パス",
@@ -135,7 +280,7 @@ def _run_search():
         if path_choice == 0:
             return
 
-        custom_paths = []
+        custom_paths: List[str] = []
         if path_choice == 2:
             custom_paths = _input_paths()
             if not custom_paths:
@@ -162,11 +307,18 @@ def _run_search():
         mode_map = {1: "keyword", 2: "regex", 3: "fuzzy"}
         mode = mode_map[mode_choice]
 
-        # Step 4: 入力内容の確認
+        # Step 4: モード固有オプション
+        mode_opts = _ask_mode_options(mode, len(keywords))
+
+        # Step 5: 共通オプション
+        common_flags = _ask_common_options()
+
+        # Step 6: 入力内容確認
         print()
         hr()
         print("  入力内容の確認")
         hr()
+        print(f"  設定ファイル   : {resolved_config or '既定（自動検出）'}")
         if custom_paths:
             print("  検索パス       :")
             for i, p in enumerate(custom_paths, 1):
@@ -175,6 +327,10 @@ def _run_search():
             print("  検索パス       : config.yaml の設定に従う")
         print(f"  検索キーワード : {' '.join(keywords)}")
         print(f"  検索モード     : {mode}")
+        for k, v in mode_opts.items():
+            print(f"  {k:14}: {v}")
+        if common_flags:
+            print(f"  追加フラグ     : {' '.join(common_flags)}")
         hr()
 
         confirm_choice = print_menu(
@@ -185,13 +341,28 @@ def _run_search():
         if confirm_choice == 0:
             return
         if confirm_choice == 2:
-            continue  # Step 1 に戻る
+            continue
 
-        # Step 5: 実行
-        args = keywords + ["--mode", mode]
+        # Step 7: 実行
+        args: List[str] = list(keywords)
+        if config_arg != "__default__":
+            args.extend(["-c", config_arg])
+        args.extend(["--mode", mode])
+        for k, v in mode_opts.items():
+            args.extend([k, v])
+        args.extend(common_flags)
         for p in custom_paths:
             args.extend(["-p", p])
-        _run_docgrep(args)
+
+        rc = _run_docgrep(args, wait=False)
+
+        # Step 8: レポートを開くか（ヒットあり/なしでも参照したい場合がある）
+        if rc in (0, 1):
+            latest = _resolve_latest_html_path(resolved_config)
+            if latest and latest.is_file():
+                if ask_yes_no("HTML レポートを開きますか？", default=True):
+                    _open_in_browser(latest)
+        wait_enter()
         return
 
 

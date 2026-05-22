@@ -223,18 +223,21 @@ search:
 # 実行制御
 runtime:
   require_office: true              # MS Office 未検出で起動中止
+  parallel: 0                       # 0=auto(CPU/2), 1=直列, N=N スレッド
   process_priority: below_normal    # normal / below_normal / idle
   com_recycle_every: 30             # COM インスタンスを N 件ごとに再生成
+  per_file_timeout_sec: 0           # 1 ファイルのタイムアウト秒。0=無効
 
 # 出力（{ts} は実行時刻 YYYYMMDD-HHMMSS に置換、含めなければ上書き保存）
 output:
   console: true
   excel:
     enabled: true
-    path: "search_result_{ts}.xlsx"
+    path: "reports/search_result_{ts}.xlsx"
   html:
     enabled: true
-    path: "search_result_{ts}.html"
+    path: "reports/search_result_{ts}.html"
+    latest_path: "reports/search_result_latest.html"   # タイムスタンプ無しの最新版
 ```
 
 ### パス指定の重要な制約
