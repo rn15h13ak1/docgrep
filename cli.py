@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as cf
 import os
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import ConfigError, load_config
 from extractors import ExtractorRegistry
@@ -15,6 +17,45 @@ from search import FileResult, Searcher
 from selfcheck import print_result, run_selfcheck
 from utils import apply_timestamp, ensure_dir, setup_logging, timestamp_slug
 from walker import iter_files
+
+
+# COM が必要な拡張子（スレッドセーフではないため直列処理）
+_COM_EXTS = {".doc", ".docx", ".ppt", ".pptx", ".xls"}
+
+
+class _NoopBar:
+    """tqdm が import できない環境用の no-op 進捗バー。"""
+
+    def __init__(self, *a, **kw) -> None:
+        pass
+
+    def update(self, n: int = 1) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _process_file(path: str, registry: ExtractorRegistry, searcher: Searcher
+                  ) -> Tuple[str, Optional[List], Optional[str], Optional[str]]:
+    """1 ファイルを抽出 + 検索する。スレッド安全であること（registry/searcher の状態を変更しない）。
+
+    Returns:
+        (path, hits or None, skip_reason or None, error_message or None)
+    """
+    try:
+        segments, skip_reason = registry.extract(path)
+    except Exception as e:
+        return path, None, None, f"extract_error: {e}"
+    if skip_reason:
+        return path, None, skip_reason, None
+    if not segments:
+        return path, None, None, None
+    try:
+        hits = searcher.search(segments)
+    except Exception as e:
+        return path, None, None, f"search_error: {e}"
+    return path, hits, None, None
 
 
 # docgrep.py/cli.py が置かれているディレクトリ。フルパスで起動された場合の
@@ -159,7 +200,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as e:
         log.warning("COM 抽出器の初期化に失敗: %s", e)
 
-    registry = ExtractorRegistry(com=com)
+    # 並列ワーカー用の registry（COM を持たない）と直列用 registry を別個に用意。
+    # 並列スレッドから COM オブジェクトに触らないことを構造的に保証する。
+    parallel_registry = ExtractorRegistry(com=None)
+    serial_registry = ExtractorRegistry(com=com)
 
     # === 走査対象: OneNote エクスポートフォルダを自動追加 ===
     paths: List[str] = list(cfg["paths"])
@@ -184,9 +228,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         from tqdm import tqdm  # type: ignore
     except ImportError:
-        tqdm = lambda it, **kw: it  # type: ignore
+        tqdm = lambda *a, **kw: _NoopBar(a, kw)  # type: ignore
 
-    log.info("走査開始: %d ファイル / paths=%s", total, paths)
+    # === ファイルを並列処理可能 / COM 必須に振り分け ===
+    parallel_files: List[str] = []
+    serial_files: List[str] = []
+    for p in file_list:
+        ext = os.path.splitext(p)[1].lower()
+        if ext in _COM_EXTS:
+            serial_files.append(p)
+        else:
+            parallel_files.append(p)
+
+    # 並列度の決定
+    configured = int(cfg["runtime"].get("parallel", 0) or 0)
+    if configured <= 0:
+        parallel_workers = max(1, (os.cpu_count() or 2) // 2)
+    else:
+        parallel_workers = configured
+
+    log.info(
+        "走査開始: %d ファイル (並列対象=%d / COM 直列=%d, 並列度=%d) / paths=%s",
+        total, len(parallel_files), len(serial_files), parallel_workers, paths,
+    )
+
     interrupted = False
     hit_results: List[FileResult] = []
     error_results: List[FileResult] = []
@@ -195,40 +260,58 @@ def main(argv: Optional[List[str]] = None) -> int:
     skip_breakdown: Dict[str, int] = {}
     start = time.monotonic()
 
-    pbar = tqdm(file_list, desc="scan", unit="file", disable=args.quiet)
-    try:
-        for path in pbar:
-            try:
-                segments, skip_reason = registry.extract(path)
-            except KeyboardInterrupt:
-                raise
-            except Exception as e:
-                error_results.append(FileResult(path=path, error=f"extract_error: {e}"))
-                log.debug("extract_error: %s: %s", path, e)
-                continue
-            if skip_reason:
-                skipped += 1
-                skip_breakdown[skip_reason] = skip_breakdown.get(skip_reason, 0) + 1
-                continue
-            if not segments:
-                continue
-            try:
-                hits = searcher.search(segments)
-            except Exception as e:
-                error_results.append(FileResult(path=path, error=f"search_error: {e}"))
-                log.debug("search_error: %s: %s", path, e)
-                continue
-            if hits:
-                fr = FileResult(path=path, hits=hits)
-                hit_results.append(fr)
-                hits_total += len(hits)
-                if cfg["output"]["console"]:
-                    from reporter.console import render_console
+    # 進捗バー + コンソール出力の競合防止用 lock
+    pbar = tqdm(total=total, desc="scan", unit="file", disable=args.quiet)
+    console_lock = threading.Lock()
+
+    def _on_result(result: Tuple[str, Optional[List], Optional[str], Optional[str]]) -> None:
+        """ワーカー結果を集約する。メインスレッドからのみ呼ぶ。"""
+        nonlocal skipped, hits_total
+        path, hits, skip_reason, error = result
+        if error:
+            error_results.append(FileResult(path=path, error=error))
+            log.debug("error: %s: %s", path, error)
+        elif skip_reason:
+            skipped += 1
+            skip_breakdown[skip_reason] = skip_breakdown.get(skip_reason, 0) + 1
+        elif hits:
+            fr = FileResult(path=path, hits=hits)
+            hit_results.append(fr)
+            hits_total += len(hits)
+            if cfg["output"]["console"]:
+                from reporter.console import render_console
+                with console_lock:
                     render_console(fr, quiet=args.quiet)
+        pbar.update(1)
+
+    try:
+        # --- 並列フェーズ (text/xlsx) ---
+        if parallel_files:
+            if parallel_workers > 1:
+                with cf.ThreadPoolExecutor(max_workers=parallel_workers,
+                                           thread_name_prefix="docgrep") as ex:
+                    futures = [ex.submit(_process_file, p, parallel_registry, searcher)
+                               for p in parallel_files]
+                    try:
+                        for fut in cf.as_completed(futures):
+                            _on_result(fut.result())
+                    except KeyboardInterrupt:
+                        # 残タスクをキャンセルしてから抜ける
+                        for f in futures:
+                            f.cancel()
+                        raise
+            else:
+                for p in parallel_files:
+                    _on_result(_process_file(p, parallel_registry, searcher))
+
+        # --- 直列フェーズ (COM: Word/PPT/旧Excel) ---
+        for p in serial_files:
+            _on_result(_process_file(p, serial_registry, searcher))
     except KeyboardInterrupt:
         interrupted = True
         log.warning("中断されました。これまでの結果を出力します。")
     finally:
+        pbar.close()
         if com is not None:
             com.shutdown()
 

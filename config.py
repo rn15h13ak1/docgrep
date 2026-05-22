@@ -37,6 +37,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "runtime": {
         "require_office": True,
+        # 並列度: 0=auto(CPU/2), 1=直列, N=N スレッド。COM (Word/PPT/旧Excel) は
+        # スレッドセーフではないため常に直列で別ワーカー実行され、ここでの並列度は
+        # text/xlsx の抽出にのみ適用される。
+        "parallel": 0,
         "process_priority": "below_normal",  # normal | below_normal | idle
         "copy_to_temp": False,
         "com_recycle_every": 30,

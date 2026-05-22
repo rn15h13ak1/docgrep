@@ -87,6 +87,12 @@ search:
 runtime:
   # MS Office 必須チェック（true: Office 未検出で起動中止 / false: 警告のみで継続）
   require_office: true
+  # 並列度（text/xlsx の抽出に適用）。
+  #   0  = auto（CPU コア数の半分。ローカル PC への影響最小化が目的）
+  #   1  = 直列（既存挙動）
+  #   N  = N スレッド
+  # COM (Word/PPT/旧Excel) はスレッドセーフではないため、ここの値に関係なく直列処理。
+  parallel: 0
   # プロセス優先度: normal | below_normal | idle
   process_priority: below_normal
   # 一時フォルダにコピーしてから読む（原本ロック完全回避）

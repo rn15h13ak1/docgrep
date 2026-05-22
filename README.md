@@ -353,6 +353,36 @@ Python `re` の正規表現。`--case-sensitive` 未指定なら `IGNORECASE` �
 
 ---
 
+## 性能チューニング
+
+### 並列化（既定で有効）
+
+text / xlsx 抽出は **ThreadPoolExecutor で並列処理** されます（COM が必要な
+`.doc`/`.docx`/`.ppt`/`.pptx`/`.xls` は COM がスレッドセーフではないため常に直列）。
+
+設定:
+```yaml
+runtime:
+  parallel: 0     # 0=auto(CPU/2) 1=直列 N=N スレッド
+```
+
+ローカル PC への影響を抑える既定値（`CPU / 2`）から始めて、必要に応じて増やしてください。
+`runtime.process_priority: below_normal` も併用するとフォアグラウンド作業を優先できます。
+
+ログに以下が出ます:
+```
+走査開始: 1247 ファイル (並列対象=1200 / COM 直列=47, 並列度=4) / paths=[...]
+```
+
+### テキスト抽出の UTF-8 ファストパス（自動）
+
+実環境のテキストは大半が UTF-8 / UTF-8 BOM 付きのため、まず `utf-8-sig` で直接
+デコードを試み、失敗時のみ `charset-normalizer` の文字コード推定にフォールバック
+します。これにより推定処理の重さを多くのケースで回避できます。
+
+CP932 (Shift-JIS) / EUC-JP / UTF-16 LE/BE などは fallback 経路で正しく
+デコードされます。
+
 ## Exit code
 
 スクリプト / バッチ / タスクスケジューラからの自動化判定に利用できます。

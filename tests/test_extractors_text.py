@@ -69,6 +69,31 @@ def test_utf8_bom_is_text(tmp_path):
     assert looks_like_text(str(p))
 
 
+def test_utf8_fast_path_strips_bom(tmp_path):
+    # utf-8-sig は BOM を除いて読み出すので、Segment の text には BOM が含まれない
+    p = tmp_path / "bom.txt"
+    p.write_bytes(b"\xef\xbb\xbf\xe6\x9d\xb1\xe4\xba\xac\n\xe5\xa4\xa7\xe9\x98\xaa")
+    segs = extract_text(str(p))
+    assert [s.text for s in segs] == ["東京", "大阪"]
+
+
+def test_shift_jis_falls_back_to_charset_normalizer(tmp_path):
+    # CP932 (Shift-JIS) は utf-8-sig で UnicodeDecodeError → charset-normalizer 経路へ。
+    # サンプルが短すぎると推定が不安定なので、ある程度長めの本文を入れる。
+    p = tmp_path / "sjis.txt"
+    content = (
+        "東京タワーは1958年に完成しました。\n"
+        "大阪城は16世紀後半に建てられた歴史的建造物です。\n"
+        "京都には多くの寺院や神社が点在しています。\n"
+        "横浜は1859年に開港し、貿易の中心地として発展しました。\n"
+    )
+    p.write_bytes(content.encode("cp932"))
+    segs = extract_text(str(p))
+    # fallback 経路を通って何らかの行がデコードできていれば OK
+    # （charset-normalizer の推定精度はバージョン依存のため、内容そのものは検証しない）
+    assert segs, "fallback 経路でデコードできるべき"
+
+
 def test_looks_like_text_rejects_pure_binary(tmp_path):
     p = tmp_path / "blob.dat"
     p.write_bytes(bytes(range(256)))
