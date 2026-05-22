@@ -257,7 +257,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     error_results: List[FileResult] = []
     skipped = 0
     hits_total = 0
-    skip_breakdown: Dict[str, int] = {}
+    # reason → [path, ...] 形式で記録（サマリ / Excel / HTML から内訳を辿れるように）
+    skip_files: Dict[str, List[str]] = {}
     start = time.monotonic()
 
     # 進捗バー + コンソール出力の競合防止用 lock
@@ -273,7 +274,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             log.debug("error: %s: %s", path, error)
         elif skip_reason:
             skipped += 1
-            skip_breakdown[skip_reason] = skip_breakdown.get(skip_reason, 0) + 1
+            skip_files.setdefault(skip_reason, []).append(path)
         elif hits:
             fr = FileResult(path=path, hits=hits)
             hit_results.append(fr)
@@ -328,8 +329,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "演算子": cfg["search"]["operator"],
         "キーワード": ", ".join(keywords),
     }
-    if skip_breakdown:
-        summary["スキップ内訳"] = ", ".join(f"{k}={v}" for k, v in skip_breakdown.items())
+    if skip_files:
+        summary["スキップ内訳"] = ", ".join(f"{k}={len(v)}" for k, v in skip_files.items())
     if interrupted:
         summary["中断"] = "Ctrl+C により途中終了"
 
@@ -340,7 +341,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             from reporter.excel import write_excel
             excel_path = apply_timestamp(cfg["output"]["excel"]["path"], slug)
             ensure_dir(Path(excel_path).resolve().parent)
-            write_excel(excel_path, hit_results, summary, errors=error_results)
+            write_excel(excel_path, hit_results, summary, errors=error_results, skipped=skip_files)
             log.info("Excel 出力: %s", excel_path)
         except Exception as e:
             log.warning("Excel 出力に失敗: %s", e)
@@ -351,7 +352,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             from reporter.html import write_html
             html_path = apply_timestamp(cfg["output"]["html"]["path"], slug)
             ensure_dir(Path(html_path).resolve().parent)
-            write_html(html_path, hit_results, summary, searcher, errors=error_results)
+            write_html(html_path, hit_results, summary, searcher, errors=error_results, skipped=skip_files)
             log.info("HTML 出力: %s", html_path)
 
             # latest_path 指定があればコピーで「タイムスタンプ無し最新版」も生成

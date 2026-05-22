@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from typing import Dict, Iterable, List, Optional
 
@@ -35,6 +36,19 @@ _TEMPLATE = Template("""<!doctype html>
     .errors { background: #fdecea; border-left: 4px solid #d93025; padding: 8px 16px; border-radius: 4px; margin-top: 12px; }
     .error-row { font-family: Menlo, Consolas, monospace; font-size: 12px; padding: 4px 0; word-break: break-all; }
     .error-row .msg { color: #b00020; }
+    /* スキップ詳細リンク（モーダル起動ボタン） */
+    .skip-link { background: #eef2f7; border: 1px solid #cfd8e3; color: #2d4a6b; padding: 1px 8px; border-radius: 3px; font-size: 12px; font-family: Menlo, Consolas, monospace; cursor: pointer; margin: 0 4px 2px 0; }
+    .skip-link:hover { background: #dde6f0; }
+    /* モーダル */
+    dialog#skip-dialog { max-width: min(900px, 90vw); width: 90vw; max-height: 80vh; border: 1px solid #ccc; border-radius: 8px; padding: 0; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+    dialog#skip-dialog::backdrop { background: rgba(0,0,0,0.4); }
+    .skip-dialog-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid #eee; }
+    .skip-dialog-header h3 { margin: 0; font-size: 15px; }
+    .skip-dialog-list { font-family: Menlo, Consolas, monospace; font-size: 12px; overflow: auto; max-height: 60vh; padding: 12px 20px; }
+    .skip-dialog-list .row { padding: 3px 0; word-break: break-all; border-bottom: 1px dotted #eee; }
+    .skip-dialog-list .row:last-child { border-bottom: 0; }
+    .skip-close { padding: 5px 14px; cursor: pointer; border: 1px solid #cfd8e3; background: #fff; border-radius: 4px; font-size: 12px; }
+    .skip-close:hover { background: #f3f5f8; }
   </style>
 </head>
 <body>
@@ -43,7 +57,16 @@ _TEMPLATE = Template("""<!doctype html>
     {% for k, v in summary.items() %}
       <div><strong>{{ k }}</strong>: {{ v }}</div>
     {% endfor %}
+    {% if skipped %}
+      <div style="margin-top:6px;">
+        <strong>スキップ詳細</strong>:
+        {% for reason, paths in skipped.items() %}
+          <button class="skip-link" data-reason="{{ reason }}">{{ reason }} ({{ paths|length }})</button>
+        {% endfor %}
+      </div>
+    {% endif %}
   </div>
+
   {% if not file_results %}
     <div class="empty">ヒットしたファイルはありません。</div>
   {% endif %}
@@ -59,6 +82,7 @@ _TEMPLATE = Template("""<!doctype html>
       {% endfor %}
     </div>
   {% endfor %}
+
   {% if errors %}
     <h2>エラー一覧 ({{ errors|length }})</h2>
     <div class="errors">
@@ -69,6 +93,40 @@ _TEMPLATE = Template("""<!doctype html>
         </div>
       {% endfor %}
     </div>
+  {% endif %}
+
+  {% if skipped %}
+    <dialog id="skip-dialog">
+      <div class="skip-dialog-header">
+        <h3 id="skip-dialog-title">スキップ詳細</h3>
+        <button class="skip-close" onclick="document.getElementById('skip-dialog').close()">閉じる</button>
+      </div>
+      <div id="skip-dialog-list" class="skip-dialog-list"></div>
+    </dialog>
+    <script>
+      const skipData = {{ skipped_json | safe }};
+      function escHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
+      document.querySelectorAll('.skip-link').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const reason = btn.dataset.reason;
+          const paths = skipData[reason] || [];
+          document.getElementById('skip-dialog-title').textContent =
+            'スキップ: ' + reason + ' (' + paths.length + ' 件)';
+          document.getElementById('skip-dialog-list').innerHTML =
+            paths.map(p => '<div class="row">' + escHtml(p) + '</div>').join('');
+          const dlg = document.getElementById('skip-dialog');
+          if (typeof dlg.showModal === 'function') {
+            dlg.showModal();
+          } else {
+            // 古いブラウザ向けフォールバック（社内では稀のはず）
+            dlg.setAttribute('open', '');
+          }
+        });
+      });
+    </script>
   {% endif %}
 </body>
 </html>
@@ -111,6 +169,7 @@ def write_html(
     summary: Dict[str, object],
     searcher: Searcher,
     errors: Optional[Iterable[FileResult]] = None,
+    skipped: Optional[Dict[str, List[str]]] = None,
 ) -> None:
     patterns = _build_highlight_patterns(searcher)
     rendered: List[FileResult] = []
@@ -122,7 +181,19 @@ def write_html(
         rendered.append(_annotate(fr))
 
     err_list = [_annotate(fr) for fr in (errors or []) if fr.error]
+    # display_path で / 統一しつつ JS 側に渡す
+    skipped_display: Dict[str, List[str]] = {}
+    if skipped:
+        for reason, paths in skipped.items():
+            skipped_display[reason] = [display_path(p) for p in paths]
+    skipped_json = json.dumps(skipped_display, ensure_ascii=False)
 
-    html_str = _TEMPLATE.render(file_results=rendered, summary=summary, errors=err_list)
+    html_str = _TEMPLATE.render(
+        file_results=rendered,
+        summary=summary,
+        errors=err_list,
+        skipped=skipped_display,
+        skipped_json=skipped_json,
+    )
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_str)

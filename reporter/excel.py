@@ -40,6 +40,7 @@ def write_excel(
     file_results: Iterable[FileResult],
     summary: Dict[str, object],
     errors: Optional[Iterable[FileResult]] = None,
+    skipped: Optional[Dict[str, List[str]]] = None,
 ) -> None:
     wb = Workbook()
     ws = wb.active
@@ -99,5 +100,21 @@ def write_excel(
         ws3.column_dimensions["A"].width = 80
         ws3.column_dimensions["B"].width = 80
         ws3.freeze_panes = "A2"
+
+    # スキップシート（理由ごとに対象パスを 1 行 1 ファイルで列挙）
+    if skipped:
+        ws4 = wb.create_sheet("skipped")
+        ws4.append(["理由", "パス"])
+        for cell in ws4[1]:
+            cell.font = Font(bold=True)
+            cell.fill = header_fill
+        for reason, paths in skipped.items():
+            for p in paths:
+                ws4.append(_row(reason, p))
+        ws4.column_dimensions["A"].width = 14
+        ws4.column_dimensions["B"].width = 80
+        ws4.freeze_panes = "A2"
+        if ws4.max_row > 1:
+            ws4.auto_filter.ref = ws4.dimensions
 
     wb.save(out_path)
