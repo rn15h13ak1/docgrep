@@ -133,6 +133,20 @@ python docgrep.py "プロジエクト" --mode fuzzy --fuzzy-threshold 0.7
 python docgrep.py "kw" -p "//server/share/docs" --excel "reports/r_{ts}.xlsx"
 ```
 
+### 対話メニュー
+
+CLI 引数を都度組み立てたくない場合は、対話メニューから起動できます:
+
+```cmd
+python menu.py
+```
+
+メニュー項目:
+
+1. **全文検索を実行** — 検索パス（config.yaml に従う / 手動指定）→ キーワード → モードを順に入力し、内容確認後に `docgrep.py` を実行します。
+2. **OneNote エクスポート（docgrep 用前処理）** — `export_onenote.ps1` を起動し、OneNote を Word(.docx) へ一括変換します。
+3. **OneNote エクスポート → 全文検索（連続実行）** — エクスポート成功後にそのまま検索フローへ進みます。
+
 ### CLI オプション一覧
 
 | オプション | 説明 |
