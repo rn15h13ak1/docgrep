@@ -1,0 +1,108 @@
+# docgrep 設定ファイル（サンプル）
+# 使い方:
+#   1. 本ファイルを config.yaml にコピー
+#   2. paths を検索対象に書き換え
+#   3. python docgrep.py "キーワード" を実行
+#      （別ディレクトリから python /full/path/to/docgrep.py で起動しても動作する）
+#
+# CLI 引数で個別項目を上書きできます（--mode, --operator, --path 等）。
+#
+# パス解決のルール:
+#   - YAML 内の相対パス（paths / onenote_export_dir / output.*.path）は
+#     この config.yaml が置かれているディレクトリを基準に解決されます。
+#   - 絶対パス（"/foo"、"Z:/projects"）と UNC ("//server/share/...") はそのまま。
+#   - バックスラッシュ "\" を含む値はロード時にエラーになります。"/" で記述してください。
+
+# 検索対象パス（複数指定可）
+# パスは「フォワードスラッシュ (/) のみ」で記述してください。
+# バックスラッシュ (\) を含む値はロード時にエラーになります。
+paths:
+  - "."
+  # UNC パス（共有サーバ）の例:
+  # - "//server/share/docs"
+  # ネットワークドライブ割当の例:
+  # - "Z:/projects"
+
+# OneNote エクスポート先（このフォルダも検索対象に自動追加）
+# export_onenote.ps1 を実行すると、開いている全ノートブックが Word(.docx) で書き出される
+onenote_export_dir: "./onenote_export"
+
+# 対象拡張子（小文字）。
+# "*" を含める or 空リストにすると拡張子フィルタを無効化し、Office 形式以外は
+# ファイル中身を見てテキスト判定 → テキストなら検索、バイナリならスキップ。
+# 既知のバイナリ拡張子 (.exe/.zip/.png/.mp4 等) は中身を見ずに即スキップされる。
+extensions:
+  - .txt
+  - .csv
+  - .log
+  - .md
+  - .tsv
+  - .xlsx
+  - .xlsm
+  - .xls
+  - .docx
+  - .doc
+  - .pptx
+  - .ppt
+  # 拡張子を限定したくない場合は上記すべてを削除して以下を有効化:
+  # - "*"
+
+# 除外設定
+exclude:
+  dirs:
+    - .git
+    - .svn
+    - node_modules
+    - __pycache__
+    - .venv
+    - venv
+  patterns:
+    - "~$*"        # Office 一時ファイル
+    - "*.tmp"
+    - ".DS_Store"
+    - "Thumbs.db"
+  max_file_size_mb: 100
+
+# 検索設定
+search:
+  # keyword | regex | fuzzy
+  mode: keyword
+  # キーワード（CLI 引数で上書き可。複数指定可）
+  keywords: []
+  # 複数キーワードの結合: and | or
+  operator: and
+  # 大文字小文字を区別
+  case_sensitive: false
+  # 全角/半角を NFKC で正規化してから検索
+  normalize_width: true
+  # あいまい検索のしきい値（mode=fuzzy 時、0.0〜1.0）
+  fuzzy_threshold: 0.80
+  # ヒット箇所の前後文字数
+  snippet_chars: 60
+  # 1ファイルあたり最大ヒット件数
+  max_hits_per_file: 20
+
+# 実行制御
+runtime:
+  # MS Office 必須チェック（true: Office 未検出で起動中止 / false: 警告のみで継続）
+  require_office: true
+  # プロセス優先度: normal | below_normal | idle
+  process_priority: below_normal
+  # 一時フォルダにコピーしてから読む（原本ロック完全回避）
+  copy_to_temp: false
+  # COM インスタンスを何件処理ごとに再生成するか（メモリリーク対策）
+  com_recycle_every: 30
+  # 1ファイルあたりタイムアウト秒。0 で無効
+  per_file_timeout_sec: 0
+
+# 出力
+# path に "{ts}" を含めると実行時刻 (YYYYMMDD-HHMMSS) に置換されます。
+# 含めなければ毎回同じファイルに上書き保存されます。
+output:
+  console: true
+  excel:
+    enabled: true
+    path: "search_result_{ts}.xlsx"
+  html:
+    enabled: true
+    path: "search_result_{ts}.html"

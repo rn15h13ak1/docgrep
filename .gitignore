@@ -1,0 +1,37 @@
+# 個人設定（config.example.yaml をテンプレに）
+config.yaml
+
+# 出力物
+search_result*.xlsx
+search_result*.html
+
+# OneNote エクスポート（PS1 が生成する大量の .docx）
+onenote_export/
+
+# プレビュー用の一時生成物（HTML レイアウト確認用、共有不要）
+preview_out/
+
+# Claude Code 関連（他メンバーは Claude 非利用のため共有しない）
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
