@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     OneNote の全ノートブックを Word(.docx) に一括エクスポートする（docgrep 検索用）。
 
@@ -36,6 +36,17 @@ param(
 
     [string]$OutDir = (Join-Path $PSScriptRoot 'onenote_export')
 )
+
+# --- 文字化け対策（Windows PowerShell 5.x 向け） ---
+# ファイル自体は BOM 付き UTF-8 で保存しているが、コンソール出力エンコーディングも
+# UTF-8 に揃えないと Write-Host / Write-Warning の日本語が化ける。
+try {
+    $null = & chcp 65001
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {
+    # 一部の制限された環境では失敗することがあるが、致命的ではないため握りつぶす
+}
 
 # OneNote COM の定数
 $hsPages = 4          # GetHierarchy のスコープ: ノートブック→セクション→ページまで
