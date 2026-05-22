@@ -7,12 +7,24 @@
 """
 from __future__ import annotations
 
+import warnings
 import zipfile
 from typing import Dict, List
 
 from lxml import etree
 
 from search import Segment
+
+
+# openpyxl が複雑なヘッダー/フッター書式を解析できないときに出す警告を抑制する。
+#   UserWarning: Cannot parse header or footer so it will be ignored
+# docgrep は印刷ヘッダー/フッターを検索対象に含めていないため、実害はないが
+# 走査時に何度も標準エラーに出てログを汚すため、message パターンで限定的に抑制。
+warnings.filterwarnings(
+    "ignore",
+    message=r"Cannot parse header or footer.*",
+    category=UserWarning,
+)
 
 
 # --- 名前空間 ---
