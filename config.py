@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
+XLSX_GRANULARITY_CHOICES = ("cell", "row")
+
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "paths": ["."],
     "onenote_export_dir": "./onenote_export",
@@ -20,6 +23,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         ".docx", ".doc",
         ".pptx", ".ppt",
     ],
+    # xlsx 抽出時の Segment 粒度: "cell" (既定) または "row"。大規模 xlsx で
+    # メモリ/時間を抑えたい場合は "row" にすると Segment 数が列数分減る。
+    "xlsx_granularity": "cell",
     "exclude": {
         "dirs": [".git", ".svn", "node_modules", "__pycache__", ".venv", "venv"],
         "patterns": ["~$*", "*.tmp", ".DS_Store", "Thumbs.db", "_docgrep_meta.json"],
@@ -133,7 +139,91 @@ def load_config(
         base_dir = Path(default_base_dir) if default_base_dir else Path.cwd()
 
     _resolve_paths(cfg, base_dir)
+    _validate_types(cfg, path or "<defaults>")
     return cfg
+
+
+def _validate_types(cfg: Dict[str, Any], source: str) -> None:
+    """設定値の型・許容値・範囲を検証する。違反は ConfigError でまとめて報告する。"""
+    errs: list[str] = []
+
+    def _need(value: Any, expected: type, key: str) -> bool:
+        if not isinstance(value, expected):
+            errs.append(f"{key}: {type(expected).__name__} を期待しましたが "
+                        f"{type(value).__name__} ({value!r}) でした")
+            return False
+        return True
+
+    s = cfg.get("search", {})
+    if _need(s.get("mode"), str, "search.mode") and s["mode"] not in ("keyword", "regex", "fuzzy"):
+        errs.append(f"search.mode: 'keyword'/'regex'/'fuzzy' のいずれかを指定 (現在: {s['mode']!r})")
+    if _need(s.get("operator"), str, "search.operator") and s["operator"] not in ("and", "or"):
+        errs.append(f"search.operator: 'and'/'or' のいずれかを指定 (現在: {s['operator']!r})")
+    if _need(s.get("case_sensitive"), bool, "search.case_sensitive"):
+        pass
+    if _need(s.get("normalize_width"), bool, "search.normalize_width"):
+        pass
+    th = s.get("fuzzy_threshold")
+    if _need(th, (int, float), "search.fuzzy_threshold"):
+        if not (0.0 <= float(th) <= 1.0):
+            errs.append(f"search.fuzzy_threshold: 0.0〜1.0 の範囲で指定 (現在: {th})")
+    if _need(s.get("snippet_chars"), int, "search.snippet_chars") and s["snippet_chars"] < 0:
+        errs.append("search.snippet_chars: 0 以上の整数")
+    if _need(s.get("max_hits_per_file"), int, "search.max_hits_per_file") and s["max_hits_per_file"] < 1:
+        errs.append("search.max_hits_per_file: 1 以上の整数")
+
+    r = cfg.get("runtime", {})
+    if _need(r.get("require_office"), bool, "runtime.require_office"):
+        pass
+    if _need(r.get("parallel"), int, "runtime.parallel") and r["parallel"] < 0:
+        errs.append("runtime.parallel: 0 以上の整数（0=auto）")
+    pp = r.get("process_priority")
+    if _need(pp, str, "runtime.process_priority") and pp not in ("normal", "below_normal", "idle"):
+        errs.append(f"runtime.process_priority: 'normal'/'below_normal'/'idle' (現在: {pp!r})")
+    if _need(r.get("com_recycle_every"), int, "runtime.com_recycle_every") and r["com_recycle_every"] < 1:
+        errs.append("runtime.com_recycle_every: 1 以上の整数")
+    pt = r.get("per_file_timeout_sec")
+    if _need(pt, (int, float), "runtime.per_file_timeout_sec") and float(pt) < 0:
+        errs.append("runtime.per_file_timeout_sec: 0 以上 (0=無効)")
+    cache_cfg = r.get("cache")
+    if cache_cfg is not None and _need(cache_cfg, dict, "runtime.cache"):
+        if "enabled" in cache_cfg:
+            _need(cache_cfg["enabled"], bool, "runtime.cache.enabled")
+
+    o = cfg.get("output", {})
+    if _need(o.get("console"), bool, "output.console"):
+        pass
+    for k in ("excel", "html"):
+        sect = o.get(k)
+        if sect is not None and _need(sect, dict, f"output.{k}"):
+            if "enabled" in sect:
+                _need(sect["enabled"], bool, f"output.{k}.enabled")
+
+    gran = cfg.get("xlsx_granularity")
+    if gran is not None and _need(gran, str, "xlsx_granularity") \
+            and gran not in XLSX_GRANULARITY_CHOICES:
+        errs.append(f"xlsx_granularity: {XLSX_GRANULARITY_CHOICES} のいずれか (現在: {gran!r})")
+
+    ext = cfg.get("extensions")
+    if ext is not None:
+        if not isinstance(ext, list):
+            errs.append(f"extensions: list を期待しましたが {type(ext).__name__}")
+        else:
+            for i, v in enumerate(ext):
+                if not isinstance(v, str):
+                    errs.append(f"extensions[{i}]: 文字列を期待しましたが {type(v).__name__}")
+
+    excl = cfg.get("exclude")
+    if isinstance(excl, dict):
+        mfs = excl.get("max_file_size_mb")
+        if mfs is not None and _need(mfs, (int, float), "exclude.max_file_size_mb") \
+                and float(mfs) < 0:
+            errs.append("exclude.max_file_size_mb: 0 以上 (0=無効)")
+
+    if errs:
+        raise ConfigError(
+            f"設定ファイル {source} の値検証に失敗:\n  - " + "\n  - ".join(errs)
+        )
 
 
 def _resolve_paths(cfg: Dict[str, Any], base_dir: Path) -> None:

@@ -74,6 +74,25 @@ class OfficeCom:
         self.counts[key] = 0
         gc.collect()
 
+    def recover_all(self) -> None:
+        """COM が応答しなくなったときに全インスタンスを破棄して再生成可能な状態にする。
+
+        タイムアウト超過などで Office プロセスが応答しなくなった疑いがあるときに
+        呼ぶ。次回 _get_* で新規 DispatchEx される。Quit() 自体が固まる可能性が
+        あるため、wait 系の例外は全て無視する。
+        """
+        for key in ("word", "excel", "ppt"):
+            app = getattr(self, key, None)
+            if app is None:
+                continue
+            try:
+                app.Quit()
+            except Exception:
+                pass
+            setattr(self, key, None)
+            self.counts[key] = 0
+        gc.collect()
+
     # =========================================================
     # Word
     # =========================================================

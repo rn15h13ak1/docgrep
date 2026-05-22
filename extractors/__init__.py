@@ -45,8 +45,9 @@ BINARY_HINT_EXTS = {
 
 
 class ExtractorRegistry:
-    def __init__(self, com=None) -> None:
+    def __init__(self, com=None, xlsx_granularity: str = "cell") -> None:
         self.com = com
+        self.xlsx_granularity = xlsx_granularity
         from .text import extract_text
         from .xlsx import extract_xlsx
         self._extract_text = extract_text
@@ -63,7 +64,7 @@ class ExtractorRegistry:
 
         # Office 形式（専用抽出器）
         if ext in XLSX_EXTS:
-            return self._extract_xlsx(path), None
+            return self._extract_xlsx(path, granularity=self.xlsx_granularity), None
         if ext in WORD_EXTS:
             if self.com is None:
                 return None, "no_office"

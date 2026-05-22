@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 from typing import Dict, Iterable, List, Optional
 
@@ -49,6 +50,16 @@ _TEMPLATE = Template("""<!doctype html>
     .skip-dialog-list .row:last-child { border-bottom: 0; }
     .skip-close { padding: 5px 14px; cursor: pointer; border: 1px solid #cfd8e3; background: #fff; border-radius: 4px; font-size: 12px; }
     .skip-close:hover { background: #f3f5f8; }
+    /* フィルタバー */
+    .filter-bar { background: #fafbfc; border: 1px solid #e6e8eb; border-radius: 6px; padding: 10px 14px; margin: 12px 0 16px; font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .filter-bar input[type="search"] { flex: 1 1 200px; min-width: 200px; padding: 4px 8px; border: 1px solid #cfd8e3; border-radius: 4px; font-size: 13px; }
+    .filter-group { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .filter-chip { padding: 2px 10px; border: 1px solid #cfd8e3; border-radius: 12px; background: #fff; cursor: pointer; font-size: 12px; user-select: none; }
+    .filter-chip.active { background: #0b67c2; color: #fff; border-color: #0b67c2; }
+    .filter-chip:hover:not(.active) { background: #eef2f7; }
+    .filter-count { color: #777; font-size: 12px; margin-left: auto; }
+    .file.hidden, .hit.hidden { display: none; }
+    .file.dim { opacity: 0.35; }
   </style>
 </head>
 <body>
@@ -67,15 +78,27 @@ _TEMPLATE = Template("""<!doctype html>
     {% endif %}
   </div>
 
-  {% if not file_results %}
+  {% if file_results %}
+    <div class="filter-bar" id="filter-bar">
+      <input type="search" id="filter-text" placeholder="パス・スニペットで絞り込み（部分一致）">
+      <span class="filter-group" id="filter-ext-group">
+        <span style="color:#666;">拡張子:</span>
+        <span class="filter-chip active" data-ext="">全て</span>
+        {% for ext in ext_set %}
+          <span class="filter-chip" data-ext="{{ ext }}">{{ ext or '(なし)' }}</span>
+        {% endfor %}
+      </span>
+      <span class="filter-count" id="filter-count"></span>
+    </div>
+  {% else %}
     <div class="empty">ヒットしたファイルはありません。</div>
   {% endif %}
   {% for fr in file_results %}
-    <div class="file">
+    <div class="file" data-ext="{{ fr.ext }}" data-path="{{ fr.path_display | lower }}">
       <div class="path"><a href="file:///{{ fr.path_url }}">{{ fr.path_display }}</a></div>
       <div class="meta">{{ fr.hits|length }} hits</div>
       {% for hit in fr.hits %}
-        <div class="hit">
+        <div class="hit" data-snippet="{{ hit.snippet_text | lower }}">
           {% if hit.locator %}<span class="loc">{{ hit.locator }}</span>{% endif %}
           <span class="snippet">{{ hit.snippet_html | safe }}</span>
         </div>
@@ -128,6 +151,63 @@ _TEMPLATE = Template("""<!doctype html>
       });
     </script>
   {% endif %}
+
+  {% if file_results %}
+  <script>
+    (function() {
+      const files = Array.from(document.querySelectorAll('.file'));
+      const textInput = document.getElementById('filter-text');
+      const extChips = document.querySelectorAll('#filter-ext-group .filter-chip');
+      const countEl = document.getElementById('filter-count');
+
+      let activeExt = '';
+      let activeText = '';
+
+      function apply() {
+        let shown = 0;
+        const q = activeText.trim().toLowerCase();
+        files.forEach(f => {
+          const ext = f.dataset.ext || '';
+          const path = f.dataset.path || '';
+          const extOk = !activeExt || ext === activeExt;
+          let textOk = true;
+          if (q) {
+            // パス OR いずれかの hit の snippet にマッチすれば OK
+            textOk = path.includes(q);
+            if (!textOk) {
+              const hits = f.querySelectorAll('.hit');
+              for (const h of hits) {
+                if ((h.dataset.snippet || '').includes(q)) { textOk = true; break; }
+              }
+            }
+          }
+          if (extOk && textOk) {
+            f.classList.remove('hidden');
+            shown++;
+          } else {
+            f.classList.add('hidden');
+          }
+        });
+        countEl.textContent = shown + ' / ' + files.length + ' ファイル表示';
+      }
+
+      extChips.forEach(chip => {
+        chip.addEventListener('click', () => {
+          extChips.forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          activeExt = chip.dataset.ext || '';
+          apply();
+        });
+      });
+      textInput.addEventListener('input', e => {
+        activeText = e.target.value || '';
+        apply();
+      });
+
+      apply();
+    })();
+  </script>
+  {% endif %}
 </body>
 </html>
 """)
@@ -160,6 +240,7 @@ def _annotate(fr: FileResult) -> FileResult:
     """テンプレートで使う表示用属性を FileResult に付与する。"""
     fr.path_url = display_path(fr.path)  # type: ignore[attr-defined]
     fr.path_display = display_path(fr.path)  # type: ignore[attr-defined]
+    fr.ext = os.path.splitext(fr.path)[1].lower()  # type: ignore[attr-defined]
     return fr
 
 
@@ -173,12 +254,21 @@ def write_html(
 ) -> None:
     patterns = _build_highlight_patterns(searcher)
     rendered: List[FileResult] = []
+    ext_set: List[str] = []
+    seen_ext: set = set()
     for fr in file_results:
         if not fr.hits:
             continue
         for hit in fr.hits:
             hit.snippet_html = _highlight(hit.snippet, patterns)
-        rendered.append(_annotate(fr))
+            # フィルタの部分一致比較用に小文字スニペットを別属性で持たせる
+            hit.snippet_text = hit.snippet  # type: ignore[attr-defined]
+        ann = _annotate(fr)
+        rendered.append(ann)
+        if ann.ext not in seen_ext:  # type: ignore[attr-defined]
+            seen_ext.add(ann.ext)  # type: ignore[attr-defined]
+            ext_set.append(ann.ext)  # type: ignore[attr-defined]
+    ext_set.sort()
 
     err_list = [_annotate(fr) for fr in (errors or []) if fr.error]
     # display_path で / 統一しつつ JS 側に渡す
@@ -194,6 +284,7 @@ def write_html(
         errors=err_list,
         skipped=skipped_display,
         skipped_json=skipped_json,
+        ext_set=ext_set,
     )
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_str)

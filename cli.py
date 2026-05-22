@@ -235,8 +235,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # 並列ワーカー用の registry（COM を持たない）と直列用 registry を別個に用意。
     # 並列スレッドから COM オブジェクトに触らないことを構造的に保証する。
-    parallel_registry = ExtractorRegistry(com=None)
-    serial_registry = ExtractorRegistry(com=com)
+    xlsx_gran = cfg.get("xlsx_granularity", "cell")
+    parallel_registry = ExtractorRegistry(com=None, xlsx_granularity=xlsx_gran)
+    serial_registry = ExtractorRegistry(com=com, xlsx_granularity=xlsx_gran)
 
     # === SQLite キャッシュ（オプトイン） ===
     cache = None
@@ -343,20 +344,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             log.info("ヒットファイル %d 件に達したため走査を打ち切ります。", max_files)
 
     def _process_with_timeout(path: str, reg: ExtractorRegistry) -> Tuple:
-        """timeout_sec > 0 なら 1 ファイル別スレッドで実行し timeout で打ち切る。"""
+        """timeout_sec > 0 なら 1 ファイル別スレッドで実行し timeout で打ち切る。
+
+        タイムアウトが COM ファイルで起きた場合は OfficeCom を破棄して
+        再生成可能な状態に戻す（後続ファイルが全て道連れにならないように）。
+        """
         if stop_event.is_set():
             return path, None, "stopped", None
         if timeout_sec <= 0:
             return _process_file(path, reg, searcher, cache=cache)
         with cf.ThreadPoolExecutor(max_workers=1,
                                    thread_name_prefix="docgrep-to") as ex:
-            fut = ex.submit(_process_file, path, reg, searcher)
+            fut = ex.submit(_process_file, path, reg, searcher, cache=cache)
             try:
                 return fut.result(timeout=timeout_sec)
             except cf.TimeoutError:
-                # ワーカースレッドは残るが、対象が固まっているなら強制終了はできない。
-                # ExecutorService を wait=False で破棄して呼び出し側は続行。
                 ex.shutdown(wait=False, cancel_futures=True)
+                # COM 直列フェーズで固まった場合は OfficeCom を破棄して再生成可能に
+                if com is not None and reg is serial_registry:
+                    try:
+                        com.recover_all()
+                        log.warning("タイムアウト後に COM インスタンスを再生成しました")
+                    except Exception:
+                        pass
                 return path, None, None, f"timeout_error: exceeded {timeout_sec:g}s"
 
     try:

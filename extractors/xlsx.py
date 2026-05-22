@@ -51,7 +51,17 @@ DRAWING_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relati
 COMMENTS_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
 
 
-def extract_xlsx(path: str) -> List[Segment]:
+def extract_xlsx(path: str, granularity: str = "cell") -> List[Segment]:
+    """xlsx を抽出する。
+
+    granularity:
+      - "cell" (既定): 1 セル = 1 Segment。locator は "Sheet1!B5"。
+      - "row":  1 行 = 1 Segment（空セル除く各セル値をタブ結合）。
+        Segment 数が列数分減り、大規模 xlsx で軽量になる。
+        locator は "Sheet1!Row 5"（列番地は失われる）。
+    """
+    if granularity not in ("cell", "row"):
+        granularity = "cell"
     segments: List[Segment] = []
 
     # 1) セル値・シート名 (openpyxl, read_only でストリーム)
@@ -66,14 +76,26 @@ def extract_xlsx(path: str) -> List[Segment]:
                         text=sheet_name,
                         locator=f"シート名: {sheet_name}",
                     ))
-                for row in ws.iter_rows():
-                    for cell in row:
-                        val = cell.value
-                        if val is None:
+                if granularity == "cell":
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            val = cell.value
+                            if val is None:
+                                continue
+                            segments.append(Segment(
+                                text=str(val),
+                                locator=f"{sheet_name}!{cell.coordinate}",
+                            ))
+                else:  # row 粒度
+                    row_idx = 0
+                    for row in ws.iter_rows(values_only=True):
+                        row_idx += 1
+                        cells = [str(v) for v in row if v is not None and str(v) != ""]
+                        if not cells:
                             continue
                         segments.append(Segment(
-                            text=str(val),
-                            locator=f"{sheet_name}!{cell.coordinate}",
+                            text="\t".join(cells),
+                            locator=f"{sheet_name}!Row {row_idx}",
                         ))
         finally:
             wb.close()
