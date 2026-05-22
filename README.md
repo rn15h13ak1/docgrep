@@ -351,6 +351,23 @@ Python `re` の正規表現。`--case-sensitive` 未指定なら `IGNORECASE` �
 `{ts}` プレースホルダーを `path` に含めると、実行時刻 `YYYYMMDD-HHMMSS` に置換されて
 履歴ファイルとして残ります。含めなければ毎回上書き保存。
 
+### 出力先と「最新版」HTML
+
+既定の出力先は `out/` フォルダ配下です（フォルダは自動作成）。
+```yaml
+output:
+  excel:
+    path: "out/search_result_{ts}.xlsx"     # 履歴付き
+  html:
+    path: "out/search_result_{ts}.html"     # 履歴付き
+    latest_path: "out/search_result_latest.html"  # 同内容を固定パスにも出力
+```
+
+`latest_path` を指定すると、タイムスタンプ無しの最新版を **同じ内容で上書き出力**
+します。ブラウザのブックマーク、他ツールからの参照リンク等、固定パスが必要な
+ユースケース向け。`""` / `null` / 設定削除で無効化されます。Excel には同等オプションは
+ありません（履歴を残す前提のため）。
+
 ---
 
 ## 性能チューニング

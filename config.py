@@ -49,8 +49,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "output": {
         "console": True,
         # path に "{ts}" を含めると実行時刻 (YYYYMMDD-HHMMSS) に置換される。
-        "excel": {"enabled": True, "path": "search_result_{ts}.xlsx"},
-        "html": {"enabled": True, "path": "search_result_{ts}.html"},
+        # 既定では out/ フォルダ配下に履歴付きで出力される。
+        "excel": {
+            "enabled": True,
+            "path": "out/search_result_{ts}.xlsx",
+        },
+        "html": {
+            "enabled": True,
+            "path": "out/search_result_{ts}.html",
+            # latest_path を指定するとタイムスタンプ無しの「最新版」が同じ内容で
+            # 上書き出力される。ブックマーク用途やリンク固定に便利。空文字 / null で無効化。
+            "latest_path": "out/search_result_latest.html",
+        },
     },
 }
 
@@ -146,8 +156,11 @@ def _resolve_paths(cfg: Dict[str, Any], base_dir: Path) -> None:
     if isinstance(output, dict):
         for key in ("excel", "html"):
             section = output.get(key)
-            if isinstance(section, dict) and isinstance(section.get("path"), str):
-                section["path"] = _r(section["path"])
+            if isinstance(section, dict):
+                if isinstance(section.get("path"), str):
+                    section["path"] = _r(section["path"])
+                if isinstance(section.get("latest_path"), str):
+                    section["latest_path"] = _r(section["latest_path"])
 
 
 def _validate_no_backslash(data: Dict[str, Any], source: str) -> None:
@@ -179,6 +192,9 @@ def _validate_no_backslash(data: Dict[str, Any], source: str) -> None:
                 op = section.get("path")
                 if isinstance(op, str) and "\\" in op:
                     violations.append(f"output.{key}.path = {op!r}")
+                lp = section.get("latest_path")
+                if isinstance(lp, str) and "\\" in lp:
+                    violations.append(f"output.{key}.latest_path = {lp!r}")
 
     if violations:
         raise ConfigError(

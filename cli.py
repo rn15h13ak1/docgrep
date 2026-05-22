@@ -352,6 +352,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             ensure_dir(Path(html_path).resolve().parent)
             write_html(html_path, hit_results, summary, searcher, errors=error_results)
             log.info("HTML 出力: %s", html_path)
+
+            # latest_path 指定があればコピーで「タイムスタンプ無し最新版」も生成
+            latest_template = cfg["output"]["html"].get("latest_path")
+            if latest_template:
+                latest_path = apply_timestamp(latest_template, slug)
+                if Path(latest_path).resolve() != Path(html_path).resolve():
+                    import shutil
+                    ensure_dir(Path(latest_path).resolve().parent)
+                    shutil.copyfile(html_path, latest_path)
+                    log.info("HTML 最新: %s", latest_path)
         except Exception as e:
             log.warning("HTML 出力に失敗: %s", e)
 

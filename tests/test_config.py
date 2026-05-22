@@ -35,6 +35,24 @@ def test_backslash_in_output_path_raises(tmp_path):
         load_config(p)
 
 
+def test_backslash_in_latest_path_raises(tmp_path):
+    p = _write_json(tmp_path / "c.json", {
+        "output": {"html": {"latest_path": "out\\latest.html"}},
+    })
+    with pytest.raises(ConfigError) as ei:
+        load_config(p)
+    assert "latest_path" in str(ei.value)
+
+
+def test_html_latest_path_resolved_against_config_dir(tmp_path):
+    cfg_path = tmp_path / "c.json"
+    _write_json(cfg_path, {
+        "output": {"html": {"latest_path": "out/latest.html"}},
+    })
+    cfg = load_config(str(cfg_path))
+    assert cfg["output"]["html"]["latest_path"] == str((tmp_path / "out" / "latest.html").resolve())
+
+
 def test_relative_paths_resolved_against_config_dir(tmp_path):
     cfg_path = tmp_path / "c.json"
     _write_json(cfg_path, {

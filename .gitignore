@@ -1,7 +1,8 @@
 # 個人設定（config.example.yaml をテンプレに）
 config.yaml
 
-# 出力物
+# 出力物（既定の出力フォルダ + 旧来のルート直下パターン）
+out/
 search_result*.xlsx
 search_result*.html
 
