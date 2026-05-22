@@ -16,13 +16,25 @@ from lxml import etree
 from search import Segment
 
 
-# openpyxl が複雑なヘッダー/フッター書式を解析できないときに出す警告を抑制する。
-#   UserWarning: Cannot parse header or footer so it will be ignored
-# docgrep は印刷ヘッダー/フッターを検索対象に含めていないため、実害はないが
-# 走査時に何度も標準エラーに出てログを汚すため、message パターンで限定的に抑制。
+# openpyxl が出す「機能未サポート」系の UserWarning を抑制する。
+# どれも docgrep の検索対象（セル値・コメント・図形等）には影響しないため
+# 実害はないが、走査時に大量に出てログを汚すので message パターンで限定的に抑制。
+#
+#   - "Cannot parse header or footer so it will be ignored"
+#       … 複雑な印刷ヘッダー/フッター書式
+#   - "Conditional Formatting extension is not supported and will be removed"
+#   - "Data Validation extension is not supported and will be removed"
+#   - "Slicer extension is not supported and will be removed"
+#   - "Pivot Table extension is not supported and will be removed"
+#       … 上記いずれも Office 2010+ の拡張要素 (x14:*) で openpyxl 未対応のもの
 warnings.filterwarnings(
     "ignore",
     message=r"Cannot parse header or footer.*",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r".*extension is not supported.*",
     category=UserWarning,
 )
 
