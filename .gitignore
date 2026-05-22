@@ -2,7 +2,7 @@
 config.yaml
 
 # 出力物（既定の出力フォルダ + 旧来のルート直下パターン）
-out/
+reports/
 search_result*.xlsx
 search_result*.html
 

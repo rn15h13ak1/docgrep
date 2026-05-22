@@ -104,16 +104,16 @@ runtime:
 
 # 出力
 # path に "{ts}" を含めると実行時刻 (YYYYMMDD-HHMMSS) に置換されます。
-# 既定は out/ フォルダ配下。フォルダが無ければ自動作成されます。
+# 既定は reports/ フォルダ配下。フォルダが無ければ自動作成されます。
 output:
   console: true
   excel:
     enabled: true
-    path: "out/search_result_{ts}.xlsx"
+    path: "reports/search_result_{ts}.xlsx"
   html:
     enabled: true
-    path: "out/search_result_{ts}.html"
+    path: "reports/search_result_{ts}.html"
     # latest_path: タイムスタンプ無しの「最新版」を同じ内容で出力するパス。
     # ブラウザのブックマークや他ツール参照を固定したい場合に有用。
     # 不要なら "" / null / 削除で無効化。
-    latest_path: "out/search_result_latest.html"
+    latest_path: "reports/search_result_latest.html"

@@ -49,17 +49,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "output": {
         "console": True,
         # path に "{ts}" を含めると実行時刻 (YYYYMMDD-HHMMSS) に置換される。
-        # 既定では out/ フォルダ配下に履歴付きで出力される。
+        # 既定では reports/ フォルダ配下に履歴付きで出力される。
         "excel": {
             "enabled": True,
-            "path": "out/search_result_{ts}.xlsx",
+            "path": "reports/search_result_{ts}.xlsx",
         },
         "html": {
             "enabled": True,
-            "path": "out/search_result_{ts}.html",
+            "path": "reports/search_result_{ts}.html",
             # latest_path を指定するとタイムスタンプ無しの「最新版」が同じ内容で
             # 上書き出力される。ブックマーク用途やリンク固定に便利。空文字 / null で無効化。
-            "latest_path": "out/search_result_latest.html",
+            "latest_path": "reports/search_result_latest.html",
         },
     },
 }

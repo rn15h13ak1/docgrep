@@ -130,7 +130,7 @@ python docgrep.py "東京"
 python docgrep.py "東京" "プロジェクト" --operator and
 python docgrep.py "[0-9]{4}-[0-9]{2}-[0-9]{2}" --mode regex
 python docgrep.py "プロジエクト" --mode fuzzy --fuzzy-threshold 0.7
-python docgrep.py "kw" -p "//server/share/docs" --excel "out/r_{ts}.xlsx"
+python docgrep.py "kw" -p "//server/share/docs" --excel "reports/r_{ts}.xlsx"
 ```
 
 ### CLI オプション一覧
@@ -353,14 +353,14 @@ Python `re` の正規表現。`--case-sensitive` 未指定なら `IGNORECASE` �
 
 ### 出力先と「最新版」HTML
 
-既定の出力先は `out/` フォルダ配下です（フォルダは自動作成）。
+既定の出力先は `reports/` フォルダ配下です（フォルダは自動作成）。
 ```yaml
 output:
   excel:
-    path: "out/search_result_{ts}.xlsx"     # 履歴付き
+    path: "reports/search_result_{ts}.xlsx"     # 履歴付き
   html:
-    path: "out/search_result_{ts}.html"     # 履歴付き
-    latest_path: "out/search_result_latest.html"  # 同内容を固定パスにも出力
+    path: "reports/search_result_{ts}.html"     # 履歴付き
+    latest_path: "reports/search_result_latest.html"  # 同内容を固定パスにも出力
 ```
 
 `latest_path` を指定すると、タイムスタンプ無しの最新版を **同じ内容で上書き出力**
