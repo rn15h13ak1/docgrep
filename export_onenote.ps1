@@ -34,7 +34,10 @@ param(
     [ValidateSet('section', 'page')]
     [string]$Granularity = 'section',
 
-    [string]$OutDir = (Join-Path $PSScriptRoot 'onenote_export')
+    # 既定はスクリプト位置の onenote_export/。
+    # param 内で $PSScriptRoot が空のことがある（dot-source / Invoke-Expression /
+    # ISE の選択実行など）ため、param 外でフォールバック付きに解決する。
+    [string]$OutDir = ''
 )
 
 # --- 文字化け対策（Windows PowerShell 5.x 向け） ---
@@ -46,6 +49,25 @@ try {
     $OutputEncoding = [System.Text.Encoding]::UTF8
 } catch {
     # 一部の制限された環境では失敗することがあるが、致命的ではないため握りつぶす
+}
+
+# --- スクリプト位置の決定（$PSScriptRoot が空のときのフォールバック） ---
+# 順序: $PSScriptRoot → $PSCommandPath の親 → $MyInvocation.MyCommand.Path の親 → CWD
+$scriptDir = $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($scriptDir)) {
+    if ($PSCommandPath) {
+        $scriptDir = Split-Path -Parent $PSCommandPath
+    } elseif ($MyInvocation.MyCommand.Path) {
+        $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    } else {
+        $scriptDir = (Get-Location).Path
+        Write-Warning "スクリプト位置を特定できなかったため、CWD ($scriptDir) を基準にします。"
+    }
+}
+
+# OutDir が未指定なら scriptDir/onenote_export を既定とする
+if ([string]::IsNullOrWhiteSpace($OutDir)) {
+    $OutDir = Join-Path $scriptDir 'onenote_export'
 }
 
 # OneNote COM の定数
