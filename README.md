@@ -18,12 +18,13 @@
 6. [OneNote の検索手順](#onenote-の検索手順)
 7. [検索モード](#検索モード)
 8. [出力](#出力)
-9. [Exit code](#exit-code)
-10. [起動時セルフチェック](#起動時セルフチェック)
-11. [ファイル構成](#ファイル構成)
-12. [トラブルシューティング](#トラブルシューティング)
-13. [既知の制約](#既知の制約)
-14. [テスト](#テスト)
+9. [性能チューニング](#性能チューニング)
+10. [Exit code](#exit-code)
+11. [起動時セルフチェック](#起動時セルフチェック)
+12. [ファイル構成](#ファイル構成)
+13. [トラブルシューティング](#トラブルシューティング)
+14. [既知の制約](#既知の制約)
+15. [テスト](#テスト)
 
 ---
 
@@ -115,7 +116,8 @@
 5. Anaconda Prompt で動作確認:
    ```cmd
    cd C:/tools/docgrep
-   python docgrep.py --help
+   python menu.py            ← 推奨。検索もOneNoteエクスポートも対話で起動できる
+   python docgrep.py --help  ← CLI 直叩きでも可
    ```
 
 **追加の `pip` / `conda` インストールは不要かつ非推奨** です。
@@ -125,47 +127,105 @@ Anaconda 同梱以外のバージョンが混ざると、社内の他 PC で動�
 
 ## 基本的な使い方
 
+起動方法は **対話メニュー** と **CLI 直叩き** の 2 通り。通常は対話メニューを推奨します。
+
+### 対話メニュー（推奨・単一エントリポイント）
+
+```cmd
+python menu.py
+```
+
+`menu.py` は **検索 (Python) と OneNote エクスポート (PowerShell) を内部で呼び出す**
+ハブで、3 項目のメインメニューから両系統の処理を起動できます。
+
+| 項目 | 内部で実行されるもの |
+|---|---|
+| **1. 全文検索を実行** | `python docgrep.py …`（引数は対話入力から自動組み立て）|
+| **2. OneNote エクスポート（docgrep 用前処理）** | `powershell -ExecutionPolicy Bypass -File export_onenote.ps1`（差分エクスポート）|
+| **3. OneNote エクスポート → 全文検索（連続実行）** | 上記 2 → 1 を順に実行 |
+
+検索フローの中で以下を対話的に指定できます:
+
+- 設定ファイル（既定の自動検出 / 別ファイル指定）
+- 検索パス（config.yaml の `paths` に従う / 手動指定 / **前回のパスを再利用**）
+- 検索キーワード（**前回値が `[履歴]` で提示され Enter で再利用**）
+- 検索モード（keyword / regex / fuzzy、**前回モードに `← 前回` バッジ**）
+- モード固有オプション
+  - keyword 複数語時 → AND / OR の選択
+  - fuzzy → しきい値 (0.0–1.0)
+- 詳細オプション（任意）: 大文字小文字 / NFKC 正規化 / `--verbose`
+- 検索完了後、**HTML レポートを既定ブラウザで開く** か確認（`config.output.html.latest_path` を参照）
+
+入力履歴は `~/.docgrep_history.json` に自動保存され、次回起動時の既定値として使われます。
+
+### CLI 直叩き（自動化・上級者向け）
+
 ```cmd
 python docgrep.py "東京"
 python docgrep.py "東京" "プロジェクト" --operator and
 python docgrep.py "[0-9]{4}-[0-9]{2}-[0-9]{2}" --mode regex
 python docgrep.py "プロジエクト" --mode fuzzy --fuzzy-threshold 0.7
 python docgrep.py "kw" -p "//server/share/docs" --excel "reports/r_{ts}.xlsx"
+
+# 走査の規模だけ事前に見る
+python docgrep.py "kw" --dry-run
+
+# 最初の 1 件で打ち切り（探索用）
+python docgrep.py "kw" --first-hit-only
+
+# キャッシュ管理
+python docgrep.py --cache-stats
+python docgrep.py --cache-vacuum
+python docgrep.py --cache-clear
 ```
-
-### 対話メニュー
-
-CLI 引数を都度組み立てたくない場合は、対話メニューから起動できます:
-
-```cmd
-python menu.py
-```
-
-メニュー項目:
-
-1. **全文検索を実行** — 検索パス（config.yaml に従う / 手動指定）→ キーワード → モードを順に入力し、内容確認後に `docgrep.py` を実行します。
-2. **OneNote エクスポート（docgrep 用前処理）** — `export_onenote.ps1` を起動し、OneNote を Word(.docx) へ一括変換します。
-3. **OneNote エクスポート → 全文検索（連続実行）** — エクスポート成功後にそのまま検索フローへ進みます。
 
 ### CLI オプション一覧
 
+CLI は `argparse` のグループ表示で 5 セクションに分かれています（`--help` 参照）。
+
+**設定・対象パス**
 | オプション | 説明 |
 |---|---|
 | `keywords...` | 検索キーワード（位置引数・複数可） |
 | `-c CONFIG`, `--config` | 設定ファイル。未指定なら CWD → スクリプト同梱の `config.yaml` を自動検出 |
 | `-p PATH`, `--path` | 検索対象パス上書き（複数指定可。設定の `paths` を置き換え）|
+
+**検索条件**
+| オプション | 説明 |
+|---|---|
 | `--mode {keyword,regex,fuzzy}` | 検索モード（既定: `keyword`）|
 | `--operator {and,or}` | 複数キーワード時の演算子（既定: `and`）|
 | `--case-sensitive` | 大文字小文字を区別 |
 | `--no-normalize-width` | NFKC 正規化（全角/半角統一）を無効化 |
 | `--fuzzy-threshold FLOAT` | あいまい検索のしきい値 0.0〜1.0（既定: 0.80）|
 | `--snippet-chars N` | ヒット箇所前後の文字数（既定: 60）|
+
+**出力**
+| オプション | 説明 |
+|---|---|
 | `--excel PATH` | Excel 出力先（`{ts}` は時刻に置換）|
 | `--html PATH` | HTML 出力先（`{ts}` は時刻に置換）|
 | `--no-console` | コンソール出力を抑制 |
+
+**動作制御**
+| オプション | 説明 |
+|---|---|
 | `--no-office-check` | MS Office チェックを skip（Office 未検出環境でテキスト/.xlsx のみ検索）|
 | `-v`, `--verbose` | DEBUG ログ |
 | `--quiet` | 進捗バー抑制（WARNING 以上のみ）|
+| `--max-files N` | N 件ヒットしたら走査打ち切り |
+| `--first-hit-only` | 最初の 1 ヒットで打ち切り（`--max-files=1` 相当）|
+| `--ordered-output` | 並列処理時もコンソール出力をファイル入力順に保つ |
+| `--dry-run` | 走査対象の集計だけ表示して終了（実走査・抽出・検索は行わない）|
+
+**抽出キャッシュ**
+| オプション | 説明 |
+|---|---|
+| `--cache` / `--no-cache` | SQLite キャッシュの有効/無効（`runtime.cache.enabled` 上書き）|
+| `--cache-path PATH` | キャッシュ DB のパス上書き |
+| `--cache-stats` | DB サイズ / エントリ数 / 平均 Segment 数を表示して終了 |
+| `--cache-vacuum` | 孤児 Segment 掃除 + SQLite VACUUM |
+| `--cache-clear` | キャッシュ DB を全消去して終了 |
 
 ### フルパス起動
 
@@ -196,7 +256,7 @@ paths:
 # OneNote エクスポート先（PS1 が書き出す .docx を検索対象に自動追加）
 onenote_export_dir: "./onenote_export"
 
-# 対象拡張子（小文字）
+# 対象拡張子（小文字）。["*"] で拡張子フィルタを無効化（中身判定で全ファイル試行）
 extensions:
   - .txt
   - .xlsx
@@ -204,10 +264,15 @@ extensions:
   - .pptx
   # ...
 
+# xlsx 抽出時の Segment 粒度: "cell"（既定）または "row"
+# row にすると 1 行 = 1 Segment、locator が "Sheet1!Row 5" となり、Segment 数が
+# 列数分減って大規模 xlsx が軽くなる（セル番地は失われる）。
+xlsx_granularity: cell
+
 # 除外設定
 exclude:
   dirs: [.git, .svn, node_modules, __pycache__]
-  patterns: ["~$*", "*.tmp", ".DS_Store"]
+  patterns: ["~$*", "*.tmp", ".DS_Store", "_docgrep_meta.json"]
   max_file_size_mb: 100
 
 # 検索設定
@@ -227,6 +292,11 @@ runtime:
   process_priority: below_normal    # normal / below_normal / idle
   com_recycle_every: 30             # COM インスタンスを N 件ごとに再生成
   per_file_timeout_sec: 0           # 1 ファイルのタイムアウト秒。0=無効
+  # SQLite 抽出キャッシュ（path + mtime + size をキーに Segment を永続化）。
+  # 2 回目以降の検索が劇的に速くなる。
+  cache:
+    enabled: false
+    path: "reports/.docgrep_cache.sqlite"
 
 # 出力（{ts} は実行時刻 YYYYMMDD-HHMMSS に置換、含めなければ上書き保存）
 output:
@@ -269,7 +339,20 @@ Python の `pywin32` から OneNote COM を呼ぶと「ライブラリは登録�
 （0x8002801D）になる環境のため、**PowerShell から COM を呼んで Word(.docx) に
 一括変換** する構成にしています。
 
-### 手順
+### 手順（menu.py 経由・推奨）
+
+PowerShell コマンドを直接打たなくても、`menu.py` から起動できます:
+
+```cmd
+python menu.py
+# → メニュー 2 番「OneNote エクスポート」または
+#   メニュー 3 番「OneNote エクスポート → 全文検索（連続実行）」
+```
+
+`menu.py` が内部で `powershell -ExecutionPolicy Bypass -File export_onenote.ps1`
+を起動します。
+
+### 手順（PowerShell 直接実行）
 
 1. **OneNote を起動** し、検索対象にしたいノートブックをすべて開いた状態にする
 2. **通常権限の PowerShell**（管理者として実行 *しない*）を開く
@@ -354,16 +437,25 @@ Python `re` の正規表現。`--case-sensitive` 未指定なら `IGNORECASE` �
 ヒットごとに `[locator] スニペット` 形式で表示。最後にサマリ表。
 
 ### Excel レポート
-3 シート構成:
-- `results`: **1ヒット1行**、列 = パス / 拡張子 / 検知箇所 / ヒット語 / スニペット / 最終更新日時。オートフィルタ有効。
-- `summary`: 走査統計（件数・処理時間・キーワード等）
+**4 シート構成**（出力時に該当データが無いシートは省略）:
+- `results`: **1ヒット1行**、列 = パス / 拡張子 / 検知箇所 / ヒット語 / スニペット / 最終更新日時。オートフィルタ + フリーズペイン有効。
+- `summary`: 走査統計（件数・処理時間・キーワード・スキップ内訳など）
 - `errors`: 抽出失敗・検索失敗のファイル一覧（あれば）
+- `skipped`: スキップされたファイルの **理由 + パス** 一覧（あれば、オートフィルタ付き）
+
+セル値には OOXML が許さない制御文字 (`\x00`-`\x08`, `\x0B`, `\x0C`, `\x0E`-`\x1F`)
+が自動でサニタイズされます (Word/PPT 由来の `\x07` / `\x0B` などが原因の
+`IllegalCharacterError` を防止)。
 
 ### HTML レポート
-- サマリーカード
+- サマリーカード（走査統計）+ **「スキップ詳細」ボタン群**
+  - 理由ごとのボタンをクリックすると `<dialog>` モーダルでパス一覧が開く
+- **フィルタバー**（ヒットあり時）
+  - パス・スニペット部分一致のテキスト検索 + 拡張子チップによる絞り込み
+  - 「N / M ファイル表示」のライブカウンタ
 - ヒットファイルごとにパス（`file:///` リンク）+ ヒット件数
 - 各ヒット行の左に locator バッジ、右にハイライト付きスニペット
-- 末尾に「エラー一覧」セクション（あれば）
+- 末尾に「エラー一覧」セクション（あれば、赤帯のカード）
 
 `{ts}` プレースホルダーを `path` に含めると、実行時刻 `YYYYMMDD-HHMMSS` に置換されて
 履歴ファイルとして残ります。含めなければ毎回上書き保存。
@@ -384,6 +476,17 @@ output:
 します。ブラウザのブックマーク、他ツールからの参照リンク等、固定パスが必要な
 ユースケース向け。`""` / `null` / 設定削除で無効化されます。Excel には同等オプションは
 ありません（履歴を残す前提のため）。
+
+### レポート索引 `reports/_index.html`
+
+検索を実行するたびに、HTML 出力先と同じディレクトリに **`_index.html` を自動生成** します。
+
+- 過去の HTML / Excel レポートを **mtime 降順** で一覧表示
+- `latest_path` のファイルがあれば別枠の「最新版」ボックスで強調
+- 各エントリにファイル名・タイムスタンプ・サイズを表示
+
+ブラウザのブックマークを `reports/_index.html` に固定しておくと、過去の検索結果を
+1 ページから辿れます。
 
 ---
 
@@ -416,6 +519,41 @@ runtime:
 
 CP932 (Shift-JIS) / EUC-JP / UTF-16 LE/BE などは fallback 経路で正しく
 デコードされます。
+
+### SQLite 抽出キャッシュ（オプトイン）
+
+`path + mtime + size` をキーに抽出済み Segment を SQLite に保存し、2 回目以降の
+検索ではファイルを開かずに **キャッシュから直接検索** します。同じファイル群に
+対して何度も検索する運用では劇的な高速化になります。
+
+```yaml
+runtime:
+  cache:
+    enabled: true
+    path: "reports/.docgrep_cache.sqlite"
+```
+
+CLI からも `--cache` / `--no-cache` / `--cache-path` で上書き可能。
+管理用に `--cache-stats` / `--cache-vacuum` / `--cache-clear` が用意されています。
+
+実行終了時に `[INFO] キャッシュ統計: hits=N, misses=N, writes=N` がログに出ます。
+
+### per-file タイムアウト
+
+`runtime.per_file_timeout_sec` を秒数で指定すると、1 ファイルの抽出が指定時間を
+超えたら強制的に打ち切ります。`timeout_error: exceeded Ns` としてエラーシートに
+記録され、後続ファイルの処理は続行されます。
+
+COM 直列フェーズでタイムアウトすると、`OfficeCom` インスタンスを破棄して
+再生成可能な状態に戻します（1 つの固まった文書が後続全てを巻き込まない）。
+
+### 走査打ち切り
+
+`--max-files N` または `--first-hit-only` で、ヒット数が条件に達した時点で
+走査を打ち切ります。探索的検索や「とりあえずヒットファイルだけ確認したい」
+用途に便利です。
+
+サマリに `打ち切り: max_files=N に到達` として記録されます。
 
 ## Exit code
 
@@ -450,22 +588,29 @@ Office 未検出環境でテキスト / `.xlsx` のみ検索したい場合は�
 
 ```
 docgrep/
-├── docgrep.py                ← エントリポイント (python docgrep.py "kw")
+├── menu.py                   ← 対話メニュー（推奨エントリポイント。検索と OneNote 両方を起動）
+├── docgrep.py                ← 検索 CLI のエントリポイント (python docgrep.py "kw")
 ├── cli.py                    ← 引数処理 + 走査・出力ドライバ
 ├── config.py / config.example.yaml
 ├── selfcheck.py              ← 起動時依存チェック
 ├── walker.py                 ← ファイル走査
 ├── normalize.py / snippet.py / search.py
 ├── priority.py / utils.py
+├── cache.py                  ← SQLite 抽出キャッシュ (SegmentCache)
 ├── extractors/
-│   ├── text.py               ← charset-normalizer（行単位）
+│   ├── text.py               ← charset-normalizer（行単位 + バイナリ判定）
 │   ├── xlsx.py               ← openpyxl + lxml
-│   └── office_com.py         ← Word / PPT / 旧 Excel
+│   └── office_com.py         ← Word / PPT / 旧 Excel (_AppHandle ベース)
 ├── reporter/
-│   ├── console.py / excel.py / html.py
-├── tests/                    ← pytest スイート
+│   ├── console.py            ← コンソール出力
+│   ├── excel.py              ← Excel 4 シート（results/summary/errors/skipped）
+│   ├── html.py               ← HTML（フィルタバー + スキップモーダル）
+│   └── index.py              ← reports/_index.html 一覧画面
+├── tests/                    ← pytest スイート（112 件）
 ├── pytest.ini
-├── export_onenote.ps1        ← OneNote → Word 一括エクスポート
+├── .github/workflows/test.yml ← Python 3.11/3.12/3.13 マトリクス CI
+├── export_onenote.ps1        ← OneNote → Word 一括エクスポート（差分更新）
+├── CHANGELOG.md              ← Sprint 単位の変更履歴
 ├── README.md
 └── .gitignore
 ```
@@ -511,6 +656,18 @@ YAML 内のパスはフォワードスラッシュ `/` のみ。`\\server\share\
 - `exclude.max_file_size_mb` で巨大ファイルを除外
 - `runtime.process_priority: idle` で他作業を優先
 - `--mode fuzzy` は遅い → `--fuzzy-threshold` を高めに
+- 同じファイル群を繰り返し検索する場合は `runtime.cache.enabled: true`
+  または `--cache` を使う（2 回目以降は劇的に速くなる）
+- 大規模 xlsx が遅い → `xlsx_granularity: row` を試す
+- 走査規模が読めない場合はまず `--dry-run` で対象数を確認
+
+### menu.py 内の PowerShell 呼び出しで「'powershell' は内部コマンドまたは外部コマンドではない」
+- Windows 標準の PowerShell が PATH 上にあることを確認（通常は問題なし）
+- WSL や別 OS のターミナルから `menu.py` を叩いていないか確認
+
+### menu.py の入力履歴をリセットしたい
+- `%USERPROFILE%\.docgrep_history.json`（Windows）/
+  `~/.docgrep_history.json`（Unix）を削除すれば次回起動で初期化されます
 
 ---
 
@@ -520,9 +677,10 @@ YAML 内のパスはフォワードスラッシュ `/` のみ。`\\server\share\
 |---|---|
 | マルチライン正規表現 | テキスト系は行単位 Segment のため `\n` をまたぐパターンはマッチしない |
 | PDF / OCR / OneNote(.one直接) | 初版スコープ外（OneNote は PS1 で Word 化して回避）|
-| 並列処理 | 未実装。設計上「逐次」（COM が単スレッド推奨のため）|
+| COM 並列 | COM はスレッドセーフではないため Word/PPT/旧 Excel は常に直列。text/xlsx のみ `runtime.parallel` で並列化される |
 | パスワード保護ファイル | 開けない場合はスキップ → エラー一覧に記録 |
-| 巨大 xlsx | セル単位 Segment のため数十万セルでメモリ・速度に影響あり。次フェーズで領域単位への切替を検討 |
+| 巨大 xlsx | セル単位 (`xlsx_granularity: cell`) は数十万セルでメモリ・速度負荷が大きい。`xlsx_granularity: row` で Segment 数を列数分削減できる（locator は `Row N` 粒度になる）|
+| 画像内 / OCR | 未対応。スキャン PDF や画像中の文字は検索されない |
 
 ---
 
@@ -536,10 +694,22 @@ pytest
 ```
 
 `pytest.ini` で `testpaths = tests` を指定済み。pytest は Anaconda 標準同梱です。
+GitHub Actions により `main` への push / PR ごとに自動実行されます
+(`.github/workflows/test.yml`、Python 3.11 / 3.12 / 3.13 マトリクス)。
 
-主なテスト:
-- `tests/test_search.py` — keyword(AND/OR) / regex / fuzzy / NFKC / locator 伝播
-- `tests/test_walker.py` — 拡張子 / 除外 / サイズ / 単体ファイル
-- `tests/test_config.py` — バックスラッシュ検証 / 相対パス解決 / ConfigError
-- `tests/test_extractors_text.py` — 行番号 locator / CRLF / 空行スキップ
-- `tests/test_normalize.py` / `test_snippet.py` / `test_utils.py`
+主なテスト（**全 112 件**）:
+
+| ファイル | 件数 | 内容 |
+|---|---|---|
+| `test_search.py` | 14 | keyword(AND/OR) / regex / fuzzy / NFKC / locator 伝播 |
+| `test_walker.py` | 8 | 拡張子 / 除外 / サイズ / `*` ワイルドカード / 単体ファイル |
+| `test_config.py` | 10 | バックスラッシュ検証 / 相対パス解決 / ConfigError / 型検証 |
+| `test_extractors_text.py` | 12 | 行番号 locator / CRLF / 空行 / UTF-8 fastpath / Shift-JIS fallback / 拡張子なし |
+| `test_extractors_xlsx.py` | 8 | シート名 / セル座標 / 行粒度 / コメント (author 付) / 破損ファイル耐性 |
+| `test_cache.py` | 6 | put/get round-trip / mtime 変更検知 / forget / 上書き / 永続化 |
+| `test_reporters.py` | 4 | Excel/HTML round-trip / 制御文字サニタイズ / モーダル表示有無 |
+| `test_excel_sanitize.py` | 4 | `_sanitize` / `_row` の単体テスト |
+| `test_cli_integration.py` | 11 | `_collect_files` / `_partition_files` / `_run_scan` / `_dry_run` / `_handle_cache_command` |
+| `test_menu.py` | 13 | 履歴 I/O / subprocess モック / レポートパス解決 |
+| `test_report_index.py` | 5 | `_index.html` 生成 / mtime 順 / latest 別枠 |
+| `test_normalize.py` / `test_snippet.py` / `test_utils.py` | 17 | 共通ユーティリティ |
