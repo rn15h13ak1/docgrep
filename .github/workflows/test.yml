@@ -26,7 +26,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
+          # cache: pip は意図的に外している。docgrep は Anaconda 同梱パッケージで
+          # 動かす前提のため requirements.txt を持たず、setup-python の pip cache
+          # が「依存ファイルが見つからない」エラーで止めてしまうのを回避する。
 
       - name: Install dependencies
         run: |
