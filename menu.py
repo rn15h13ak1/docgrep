@@ -209,12 +209,32 @@ def _run_docgrep(args: List[str], wait: bool = True) -> int:
 
 
 def _run_export(wait: bool = True) -> int:
-    """OneNote を Word(.docx) に一括エクスポート（粒度は ps1 既定の section 固定）。"""
+    """OneNote を Word(.docx) に一括エクスポート（粒度は ps1 既定の section 固定）。
+
+    ExecutionPolicy 対策:
+      - -NoProfile: ユーザープロファイル内の Set-ExecutionPolicy を回避
+      - -ExecutionPolicy Bypass: 起動時の Process スコープで Bypass を強制
+      - 事前に Unblock-File を試行（ZIP 展開で付く Zone.Identifier ADS を除去）
+    """
     script = SCRIPT_DIR / "export_onenote.ps1"
-    cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)]
+
+    # Step 1: スクリプトに Zone.Identifier (ダウンロード由来のブロック印) があれば剥がす
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-Command", f"try {{ Unblock-File -LiteralPath '{script}' -ErrorAction Stop }} catch {{}}"],
+            cwd=SCRIPT_DIR, capture_output=True, timeout=15,
+        )
+    except Exception:
+        # Unblock-File が無い古い環境などでも続行
+        pass
+
+    # Step 2: 本体起動
+    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+           "-File", str(script)]
 
     print()
-    print(f"  実行: powershell -ExecutionPolicy Bypass -File export_onenote.ps1")
+    print("  実行: powershell -NoProfile -ExecutionPolicy Bypass -File export_onenote.ps1")
     hr("-")
 
     result = subprocess.run(cmd, cwd=SCRIPT_DIR)
@@ -224,6 +244,13 @@ def _run_export(wait: bool = True) -> int:
         print("  完了しました。")
     else:
         print(f"  エラーが発生しました（終了コード: {result.returncode}）")
+        # ExecutionPolicy 系の典型的失敗にヒントを出す
+        if result.returncode in (1, 2):
+            print("  ※ 'is not digitally signed' / Execution Policy エラーの場合:")
+            print("     1) ファイルを右クリック→プロパティ→「許可する」にチェック")
+            print("     2) もしくは PowerShell で:")
+            print(f"        Unblock-File '{script}'")
+            print("     3) GPO で AllSigned が強制されている場合は管理者に相談")
 
     if wait:
         wait_enter()

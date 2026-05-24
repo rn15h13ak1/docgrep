@@ -113,10 +113,10 @@ def test_run_docgrep_invokes_subprocess_with_expected_args(monkeypatch):
 
 
 def test_run_export_invokes_powershell(monkeypatch):
-    captured = {}
+    calls = []
 
     def fake_run(cmd, cwd=None, **kw):
-        captured["cmd"] = cmd
+        calls.append(cmd)
         return MagicMock(returncode=0)
 
     monkeypatch.setattr(menu.subprocess, "run", fake_run)
@@ -124,12 +124,16 @@ def test_run_export_invokes_powershell(monkeypatch):
 
     rc = menu._run_export(wait=False)
     assert rc == 0
-    cmd = captured["cmd"]
-    assert cmd[0] == "powershell"
-    assert "-ExecutionPolicy" in cmd and "Bypass" in cmd
-    assert "-File" in cmd
+
+    # 2 回呼ばれる: 1) Unblock-File 試行, 2) 本体起動
+    assert len(calls) >= 1
+    main_cmd = calls[-1]
+    assert main_cmd[0] == "powershell"
+    assert "-NoProfile" in main_cmd
+    assert "-ExecutionPolicy" in main_cmd and "Bypass" in main_cmd
+    assert "-File" in main_cmd
     # スクリプト本体のパスを最後の要素として渡している
-    assert cmd[-1].endswith("export_onenote.ps1")
+    assert main_cmd[-1].endswith("export_onenote.ps1")
 
 
 def test_run_docgrep_reports_each_exit_code(monkeypatch, capsys):

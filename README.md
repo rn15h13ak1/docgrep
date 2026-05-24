@@ -428,6 +428,47 @@ Anaconda フル版を使っていますか? `conda list` で `openpyxl`, `lxml`,
 - スクリプト実行中に OneNote を閉じていないか
 - OneNote に検索対象のノートブックを開き直して再実行
 
+### PowerShell が「is not digitally signed」エラーで動かない
+
+```
+File ...\export_onenote.ps1 cannot be loaded.
+The file ...\export_onenote.ps1 is not digitally signed.
+You cannot run this script on the current system.
+```
+
+PowerShell の Execution Policy がスクリプトを拒否しています。対処は以下の順で:
+
+1. **`menu.py` から起動する**（最も簡単・推奨）
+   ```cmd
+   python menu.py
+   ```
+   menu は内部で `-NoProfile -ExecutionPolicy Bypass` で起動 + 事前に
+   `Unblock-File` を試行するため、多くの環境で 1 発で通ります。
+
+2. **`Unblock-File` でダウンロード由来のブロックを解除**
+   GitHub から zip でダウンロードして展開した場合、ファイルに
+   "Zone.Identifier" マークが付いていることがあります:
+   ```powershell
+   Unblock-File .\export_onenote.ps1
+   ```
+   または、エクスプローラで右クリック → プロパティ → 下部「セキュリティ:
+   このファイルは他のコンピューターから取得したものです」の「**許可する**」に
+   チェック → OK。
+
+3. **手動で Bypass 付き起動**
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\export_onenote.ps1
+   ```
+   `-NoProfile` を付けるとユーザープロファイル内の `Set-ExecutionPolicy` を
+   回避できます（プロファイルで `AllSigned` を設定している場合）。
+
+4. **GPO で AllSigned が強制されている場合（社内 PC によくある）**
+   `-ExecutionPolicy Bypass` も GPO の MachinePolicy には勝てません。
+   この場合は管理者に以下のいずれかを相談してください:
+   - 当該フォルダのみ実行許可
+   - スクリプトを社内 CA で署名
+   - ローカルユーザースコープでの `RemoteSigned` 許可
+
 ### 設定ファイルのバックスラッシュエラー
 ```
 設定エラー: 設定ファイル ./config.yaml のパス値にバックスラッシュ (\) が含まれています。
