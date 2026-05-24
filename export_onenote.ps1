@@ -162,11 +162,29 @@ if ($prevGranularity -and ($prevGranularity -ne $Granularity)) {
 }
 
 # 4) エクスポート対象を粒度に応じて収集（lastModifiedTime もここで取得）
+#
+# OneNote のごみ箱 (Recycle Bin / Deleted Pages) 内のノートブック・セクション・
+# ページは Publish しようとすると失敗するため事前にスキップする。
+# 判定属性:
+#   - isInRecycleBin="true" … ごみ箱に入っているアイテム自体
+#   - isRecycleBin="true"   … ごみ箱セクション本体
+#   - isDeletedPages="true" … 「削除済みページ」用の特殊セクション
 $targets = @()
+$skippedDeleted = 0
 
 foreach ($notebook in $hierarchy.SelectNodes('//one:Notebook', $ns)) {
+    if ($notebook.isInRecycleBin -eq 'true') {
+        $skippedDeleted++
+        continue
+    }
     $nbName = Sanitize-Name $notebook.name
     foreach ($section in $notebook.SelectNodes('.//one:Section', $ns)) {
+        if ($section.isInRecycleBin -eq 'true' -or
+            $section.isRecycleBin   -eq 'true' -or
+            $section.isDeletedPages -eq 'true') {
+            $skippedDeleted++
+            continue
+        }
         $secName = Sanitize-Name $section.name
         if ($Granularity -eq 'section') {
             $targets += [pscustomobject]@{
@@ -176,6 +194,10 @@ foreach ($notebook in $hierarchy.SelectNodes('//one:Notebook', $ns)) {
             }
         } else {
             foreach ($page in $section.SelectNodes('.//one:Page', $ns)) {
+                if ($page.isInRecycleBin -eq 'true') {
+                    $skippedDeleted++
+                    continue
+                }
                 $pgName = Sanitize-Name $page.name
                 $targets += [pscustomobject]@{
                     ID           = $page.ID
@@ -185,6 +207,10 @@ foreach ($notebook in $hierarchy.SelectNodes('//one:Notebook', $ns)) {
             }
         }
     }
+}
+
+if ($skippedDeleted -gt 0) {
+    Write-Host "ごみ箱内ノート: $skippedDeleted 件 → スキップ" -ForegroundColor DarkGray
 }
 
 if ($targets.Count -eq 0) {
@@ -300,8 +326,10 @@ try {
 
 Write-Host ''
 Write-Host '=== 完了 ===' -ForegroundColor Cyan
-Write-Host "新規/更新: $ok 件 / スキップ: $skipped 件 / リネーム: $renamed 件 / 削除: $deleted 件 / 失敗: $ng 件"
+Write-Host "新規/更新: $ok 件 / スキップ: $skipped 件 / リネーム: $renamed 件 / 削除: $deleted 件 / 失敗: $ng 件 / ごみ箱: $skippedDeleted 件"
 Write-Host "出力先: $OutDir / メタ: $metaPath"
 if ($ng -gt 0) {
     Write-Host '失敗がある場合は、OneNote を起動したまま・通常権限で再実行してください。' -ForegroundColor Yellow
+    Write-Host '（"削除されたページ" 系のエラーは isInRecycleBin で事前スキップしていますが、' -ForegroundColor Yellow
+    Write-Host '  個別ノートが復元/移動の途中など特殊な状態だと Publish が失敗することがあります）' -ForegroundColor Yellow
 }
