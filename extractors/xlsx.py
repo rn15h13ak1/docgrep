@@ -1,7 +1,9 @@
 """xlsx / xlsm 抽出。
 
 - セル値・シート名: openpyxl（read_only モード）— セル単位で Segment 化
-- セルコメント: xl/comments*.xml をパース（シート関連付け）
+- セルコメント（従来メモ）: xl/comments*.xml をパース（シート関連付け）
+- スレッドコメント（Excel 2016+ / Office 2024 既定）:
+  xl/threadedComments/threadedComment*.xml + xl/persons/person*.xml をパース
 - テキストボックス/図形/SmartArt/グラフ/ワードアート: xl/drawings/* をパース
   → シート rels から関連付けたシート名 + shape 名で locator 化
 """
@@ -49,6 +51,15 @@ OD_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 DRAWING_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing"
 COMMENTS_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
+
+# --- スレッドコメント (Excel 2016+ / Office 2024 既定) の名前空間・型 ---
+# threadedComment*.xml と persons*.xml は 2018 版 threadedcomments 名前空間、
+# sheet ↔ threadedComments の rels は 2017/10 の相対 URI。
+TC_NS = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+TC_TEXT = f"{{{TC_NS}}}text"
+TC_COMMENT = f"{{{TC_NS}}}threadedComment"
+TC_PERSON = f"{{{TC_NS}}}person"
+THREADED_COMMENTS_REL_TYPE = "http://schemas.microsoft.com/office/2017/10/relationships/threadedComment"
 
 
 def extract_xlsx(path: str, granularity: str = "cell") -> List[Segment]:
@@ -103,13 +114,15 @@ def extract_xlsx(path: str, granularity: str = "cell") -> List[Segment]:
         # openpyxl で失敗してもオブジェクト抽出は試す
         pass
 
-    # 2) ZIP 内 XML（drawings / charts / diagrams / comments）
+    # 2) ZIP 内 XML（drawings / charts / diagrams / comments / threadedComments）
     try:
         with zipfile.ZipFile(path) as z:
             name_to_lower = {n: n.lower() for n in z.namelist()}
             lower_to_name = {v: k for k, v in name_to_lower.items()}
             drawing_to_sheet = _build_drawing_sheet_map(z, lower_to_name)
             comments_to_sheet = _build_comments_sheet_map(z, lower_to_name)
+            threaded_to_sheet = _build_threaded_comments_sheet_map(z, lower_to_name)
+            persons = _load_persons(z, lower_to_name)
 
             for name, lname in name_to_lower.items():
                 if not lname.endswith(".xml"):
@@ -136,6 +149,12 @@ def extract_xlsx(path: str, granularity: str = "cell") -> List[Segment]:
                             text=text,
                             locator=f"SmartArt ({diagram_id})",
                         ))
+
+                elif lname.startswith("xl/threadedcomments/threadedcomment"):
+                    sheet = threaded_to_sheet.get(lname, "")
+                    segments.extend(_extract_threaded_comments(
+                        z.read(name), sheet, persons,
+                    ))
 
                 elif lname.startswith("xl/comments"):
                     sheet = comments_to_sheet.get(lname, "")
@@ -241,6 +260,47 @@ def _build_comments_sheet_map(z: zipfile.ZipFile, lower_to_name: Dict[str, str])
     return out
 
 
+def _build_threaded_comments_sheet_map(z: zipfile.ZipFile, lower_to_name: Dict[str, str]) -> Dict[str, str]:
+    """threadedComment*.xml (小文字パス) → sheet 表示名 のマップ。"""
+    sheet_to_part = _build_sheet_name_to_part(z)
+    out: Dict[str, str] = {}
+    for sheet_name, part in sheet_to_part.items():
+        rels_lower = _sheet_rels_path(part)
+        orig = lower_to_name.get(rels_lower)
+        if not orig:
+            continue
+        try:
+            rels_xml = etree.fromstring(z.read(orig))
+        except (KeyError, etree.XMLSyntaxError):
+            continue
+        for rel in rels_xml.findall(f"{{{PKG_REL_NS}}}Relationship"):
+            if rel.get("Type") == THREADED_COMMENTS_REL_TYPE:
+                resolved = _resolve_target(part, rel.get("Target", ""))
+                out[resolved] = sheet_name
+    return out
+
+
+def _load_persons(z: zipfile.ZipFile, lower_to_name: Dict[str, str]) -> Dict[str, str]:
+    """xl/persons/person*.xml をパースして personId → displayName マップを返す。
+
+    threadedComment の personId 属性はここに定義された `id` と対応する。
+    """
+    persons: Dict[str, str] = {}
+    for lname, orig in lower_to_name.items():
+        if not lname.startswith("xl/persons/") or not lname.endswith(".xml"):
+            continue
+        try:
+            root = etree.fromstring(z.read(orig))
+        except (KeyError, etree.XMLSyntaxError):
+            continue
+        for p in root.iter(TC_PERSON):
+            pid = p.get("id", "")
+            name = p.get("displayName", "")
+            if pid:
+                persons[pid] = name
+    return persons
+
+
 # -----------------------------------------------------------------------------
 # drawings / comments の XML パース
 # -----------------------------------------------------------------------------
@@ -336,6 +396,39 @@ def _extract_comments(z: zipfile.ZipFile, name: str, sheet: str) -> List[Segment
         if not text:
             continue
         loc = f"{sheet_prefix}{ref} コメント" if ref else "コメント"
+        if author:
+            loc += f" ({author})"
+        segs.append(Segment(text=text, locator=loc))
+    return segs
+
+
+def _extract_threaded_comments(xml_bytes: bytes, sheet: str,
+                               persons: Dict[str, str]) -> List[Segment]:
+    """threadedComment*.xml をパースして Segment リストを返す。
+
+    parentId 属性の有無で「スレッドコメント」と「スレッド返信」を区別し、
+    persons マップから発言者の displayName を解決して locator に埋める。
+    """
+    segs: List[Segment] = []
+    try:
+        root = etree.fromstring(xml_bytes)
+    except etree.XMLSyntaxError:
+        return segs
+
+    sheet_prefix = (sheet + "!") if sheet else ""
+    for c in root.iter(TC_COMMENT):
+        ref = c.get("ref", "")
+        person_id = c.get("personId", "")
+        parent_id = c.get("parentId", "")
+        author = persons.get(person_id, "")
+        text_node = c.find(TC_TEXT)
+        if text_node is None or not text_node.text:
+            continue
+        text = text_node.text.strip()
+        if not text:
+            continue
+        kind = "スレッド返信" if parent_id else "スレッドコメント"
+        loc = f"{sheet_prefix}{ref} {kind}" if ref else kind
         if author:
             loc += f" ({author})"
         segs.append(Segment(text=text, locator=loc))

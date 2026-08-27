@@ -5,6 +5,15 @@
 
 ## [Unreleased]
 
+### Added
+- Excel スレッドコメント抽出対応 (Excel 2016+ / Office LTSC 2024 で既定のコメント形式)
+  - `xl/threadedComments/threadedComment*.xml` をパースし、locator を
+    `Sheet1!B5 スレッドコメント (山田太郎)` / `Sheet1!B5 スレッド返信 (鈴木花子)`
+    形式で生成
+  - `xl/persons/person*.xml` から発言者の `displayName` を解決
+  - シート ↔ threadedComments の関連付けは 2017/10 版 rels Type で解決
+  - `parentId` の有無で「スレッドコメント」と「スレッド返信」を区別
+
 ## Sprint G — レポート索引
 
 ### Added

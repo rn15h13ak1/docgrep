@@ -503,7 +503,7 @@ Windows 標準の PowerShell が PATH 上にあることを確認。WSL や別 O
 | 形式 | 拡張子 | 抽出方式 | 抽出される本文 | 検知箇所 (locator) 例 |
 |---|---|---|---|---|
 | テキスト | 拡張子非依存（中身判定） | charset-normalizer + バイナリ判定 | 全文（行単位）| `行 12` |
-| Excel 新 | `.xlsx` / `.xlsm` | openpyxl + lxml | セル値・シート名・コメント・テキストボックス・図形・SmartArt・グラフ | `Sheet1!B5` / `Sheet1: 図形「TextBox 1」` / `Sheet1!C12 コメント (Tanaka)` |
+| Excel 新 | `.xlsx` / `.xlsm` | openpyxl + lxml | セル値・シート名・コメント（従来メモ + Excel 2016+ の **スレッドコメント/返信**）・テキストボックス・図形・SmartArt・グラフ | `Sheet1!B5` / `Sheet1: 図形「TextBox 1」` / `Sheet1!C12 コメント (Tanaka)` / `Sheet1!D8 スレッドコメント (山田太郎)` / `Sheet1!D8 スレッド返信 (鈴木花子)` |
 | Word | `.doc` / `.docx` | MS Office COM | 本文・ヘッダ/フッタ・図形内・コメント | `本文` / `セクション 1 / ヘッダー` / `コメント #2 (Yamada)` |
 | PowerPoint | `.ppt` / `.pptx` | MS Office COM | スライド本文・図形内・ノート | `スライド 5 / Title 1` / `スライド 5 / ノート` |
 | Excel 旧 | `.xls` | MS Office COM | セル値・シート名・図形 | `Sheet1!B5` / `Sheet1: 図形「Rectangle 1」` |

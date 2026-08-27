@@ -139,3 +139,88 @@ def test_corrupted_xlsx_returns_empty_without_raising(tmp_path):
     # zip でも openpyxl でもない → 例外を握りつぶして空リスト
     segs = extract_xlsx(str(f), granularity="cell")
     assert segs == []
+
+
+# =============================================================================
+# スレッドコメント (Excel 2016+ / Office 2024 既定)
+# =============================================================================
+
+_THREADED_XML_STANDARD = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">
+    <threadedComment ref="B5" personId="{PID1}" id="{ID1}">
+        <text>これは検討中の項目です</text>
+    </threadedComment>
+    <threadedComment ref="B5" personId="{PID2}" id="{ID2}" parentId="{ID1}">
+        <text>了解しました</text>
+    </threadedComment>
+    <threadedComment ref="D8" personId="{PID3}" id="{ID3}">
+        <text>単発コメント（発言者マップに無い personId）</text>
+    </threadedComment>
+</ThreadedComments>""".encode("utf-8")
+
+
+def test_threaded_comments_parse_with_persons():
+    from extractors.xlsx import _extract_threaded_comments
+    persons = {"{PID1}": "山田太郎", "{PID2}": "鈴木花子"}
+    segs = _extract_threaded_comments(_THREADED_XML_STANDARD, "Sheet1", persons)
+    assert len(segs) == 3
+
+    # 最初のコメント（parentId 無し）→ スレッドコメント
+    assert segs[0].text == "これは検討中の項目です"
+    assert segs[0].locator == "Sheet1!B5 スレッドコメント (山田太郎)"
+
+    # parentId あり → スレッド返信
+    assert segs[1].text == "了解しました"
+    assert segs[1].locator == "Sheet1!B5 スレッド返信 (鈴木花子)"
+
+    # persons に無い personId → 発言者名なし
+    assert segs[2].text == "単発コメント（発言者マップに無い personId）"
+    assert segs[2].locator == "Sheet1!D8 スレッドコメント"
+
+
+def test_threaded_comments_without_sheet_name():
+    from extractors.xlsx import _extract_threaded_comments
+    segs = _extract_threaded_comments(_THREADED_XML_STANDARD, "", {})
+    # sheet 空 → prefix 無しでも動作
+    assert segs[0].locator == "B5 スレッドコメント"
+
+
+def test_threaded_comments_empty_text_is_skipped():
+    from extractors.xlsx import _extract_threaded_comments
+    xml = ("""<?xml version="1.0"?>
+<ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">
+    <threadedComment ref="A1" personId="{X}" id="{Y}"><text></text></threadedComment>
+    <threadedComment ref="A2" personId="{X}" id="{Z}"><text>   </text></threadedComment>
+    <threadedComment ref="A3" personId="{X}" id="{W}"><text>OK</text></threadedComment>
+</ThreadedComments>""").encode("utf-8")
+    segs = _extract_threaded_comments(xml, "S1", {})
+    # 空文字 / 空白のみは除外、"OK" だけ残る
+    assert len(segs) == 1
+    assert segs[0].text == "OK"
+
+
+def test_threaded_comments_invalid_xml_returns_empty():
+    from extractors.xlsx import _extract_threaded_comments
+    assert _extract_threaded_comments(b"not xml", "Sheet1", {}) == []
+
+
+def test_load_persons_from_zip(tmp_path):
+    """xl/persons/person*.xml が読み込まれて id→displayName になること。"""
+    import zipfile as _zf
+    from extractors.xlsx import _load_persons
+
+    xlsx_path = tmp_path / "with_persons.xlsx"
+    persons_xml = ("""<?xml version="1.0"?>
+<personList xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">
+    <person id="{P1}" displayName="山田太郎" userId="s::y@example.com" providerId="AD"/>
+    <person id="{P2}" displayName="鈴木花子" userId="s::h@example.com" providerId="AD"/>
+</personList>""").encode("utf-8")
+    with _zf.ZipFile(xlsx_path, "w") as z:
+        z.writestr("xl/persons/person1.xml", persons_xml)
+
+    with _zf.ZipFile(xlsx_path) as z:
+        name_to_lower = {n: n.lower() for n in z.namelist()}
+        lower_to_name = {v: k for k, v in name_to_lower.items()}
+        persons = _load_persons(z, lower_to_name)
+
+    assert persons == {"{P1}": "山田太郎", "{P2}": "鈴木花子"}
