@@ -21,7 +21,7 @@ def test_apply_timestamp_empty_input():
 
 
 def test_display_path_normalises_backslashes():
-    assert display_path("C:\\Users\\foo") == "C:/Users/foo"
+    assert display_path("C:\\Users\\foo") == "C:/Users/foo"  # check-privacy:ignore
 
 
 def test_display_path_passthrough():

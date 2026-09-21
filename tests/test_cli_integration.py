@@ -213,7 +213,7 @@ def test_dry_run_prints_breakdown(capsys):
     files = ["a.txt", "b.md", "c.xlsx", "d.docx"]
     rc = _dry_run(file_list=files, parallel_files=["a.txt", "b.md", "c.xlsx"],
                   serial_files=["d.docx"], parallel_workers=4,
-                  paths=["/tmp/x"])
+                  paths=["/tmp/x"])  # check-privacy:ignore
     assert rc == EXIT_HITS_FOUND
     out = capsys.readouterr().out
     assert "DRY RUN" in out
