@@ -4,6 +4,23 @@
 
 各リポジトリ固有の事情は本ファイルに追記する。
 
+## 検査
+
+Markdown を編集したら、コミット前に次を実行する（[規約 D](../ws-conventions/README.md#d-編集後の検査)）。
+
+```bash
+../ws-conventions/bin/check-markdown.sh .
+../ws-conventions/bin/check-privacy.sh .
+```
+
+Python のコードを変えたら `pytest` も通す。
+
+**ADR は使っていない。** 本リポジトリの選択は README と CHANGELOG に収まる範囲で、
+意思決定の記録を別に残すほどの分岐が無いため。したがって `check-terms.sh` と
+`gen-decision-index.py` は対象外。
+
+`bin/` にも `scripts/` にも検査スクリプトを置いていないため、`check-commands.sh` も対象外。
+
 ## commit / push の方針（共通規約 A からの逸脱）
 
 **本リポジトリでは、修正のたびに自動でコミット・プッシュする。** 利用者の指示による（2026-09-21）。
