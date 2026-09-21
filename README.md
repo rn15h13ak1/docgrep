@@ -830,3 +830,7 @@ GitHub Actions により `main` への push / PR ごとに自動実行されま�
 ## 変更履歴
 
 Sprint 単位の変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
+
+## ライセンス
+
+MIT License。全文は [LICENSE](LICENSE) にあります。
